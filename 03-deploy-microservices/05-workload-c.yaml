@@ -1,0 +1,53 @@
+# Purpose: Represent ms-c on IBM Cloud VSI in the mesh (WorkloadGroup + WorkloadEntry + Service).
+# Replace VSI_PRIVATE_IP with the VSI address reachable from the cluster (and east-west gateway).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ms-c
+  namespace: osm-poc-demo
+---
+apiVersion: networking.istio.io/v1
+kind: WorkloadGroup
+metadata:
+  name: ms-c
+  namespace: osm-poc-demo
+spec:
+  metadata:
+    labels:
+      app: ms-c
+      version: v1
+  template:
+    serviceAccount: ms-c
+    network: vsi-network
+---
+apiVersion: networking.istio.io/v1
+kind: WorkloadEntry
+metadata:
+  name: ms-c-vsi
+  namespace: osm-poc-demo
+  labels:
+    app: ms-c
+    version: v1
+spec:
+  address: VSI_PRIVATE_IP
+  labels:
+    app: ms-c
+    version: v1
+    ambient.istio.io/redirection: enabled
+    topology.istio.io/network: vsi-network
+  serviceAccount: ms-c
+  ports:
+    http: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms-c
+  namespace: osm-poc-demo
+  labels:
+    app: ms-c
+spec:
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

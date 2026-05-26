@@ -1,0 +1,17 @@
+# Purpose: Helm values for IBM Cloud Logs agent on ROCKS (OpenShift).
+# Copy to logs-agent-values.yaml and fill placeholders before install.
+#
+# Docs: https://cloud.ibm.com/docs/cloud-logs?topic=cloud-logs-agent-helm-os-deploy
+
+image:
+  version: "1.6.0"
+
+env:
+  ingestionHost: "<your-logs-instance-guid>.ingress.<region>.logs.cloud.ibm.com"
+  ingestionPort: "443"
+  iamMode: "TrustedProfile"
+  trustedProfileID: "Profile-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  # Alternative: iamMode: "IAMAPIKey" and pass --set secret.iamAPIKey=... on helm install
+
+kubernetes:
+  clusterName: "rocks-osm-poc"

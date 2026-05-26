@@ -1,0 +1,18 @@
+# Purpose: Istio control plane with ambient profile and multi-network mesh identity.
+apiVersion: sailoperator.io/v1
+kind: Istio
+metadata:
+  name: default
+spec:
+  namespace: istio-system
+  profile: ambient
+  values:
+    global:
+      meshID: mesh1
+      network: main-network
+      multiCluster:
+        clusterName: rocks-cluster
+    pilot:
+      trustedZtunnelNamespace: ztunnel
+      env:
+        PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION: "true"

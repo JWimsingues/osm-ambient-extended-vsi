@@ -1,0 +1,12 @@
+# Purpose: Istio CNI for ambient traffic redirection on OpenShift nodes.
+apiVersion: sailoperator.io/v1
+kind: IstioCNI
+metadata:
+  name: default
+spec:
+  namespace: istio-cni
+  profile: ambient
+  values:
+    cni:
+      ambient:
+        reconcileIptablesOnStartup: true

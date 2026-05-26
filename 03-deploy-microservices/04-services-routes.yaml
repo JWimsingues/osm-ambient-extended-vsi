@@ -1,0 +1,60 @@
+# Purpose: ClusterIP services and OpenShift Routes for ms-a and ms-b.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms-a
+  namespace: osm-poc-demo
+  labels:
+    app: ms-a
+spec:
+  selector:
+    app: ms-a
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ms-b
+  namespace: osm-poc-demo
+  labels:
+    app: ms-b
+spec:
+  selector:
+    app: ms-b
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ms-a
+  namespace: osm-poc-demo
+spec:
+  to:
+    kind: Service
+    name: ms-a
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ms-b
+  namespace: osm-poc-demo
+spec:
+  to:
+    kind: Service
+    name: ms-b
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

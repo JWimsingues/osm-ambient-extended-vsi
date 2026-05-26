@@ -1,0 +1,8 @@
+# Purpose: Single OpenShift project for all demo microservices and mesh policies.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: osm-poc-demo
+  labels:
+    istio.io/dataplane-mode: ambient
+    istio-discovery: enabled

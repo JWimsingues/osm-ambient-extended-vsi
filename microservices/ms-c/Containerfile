@@ -1,0 +1,14 @@
+# Purpose: Runtime image for ms-c on IBM Cloud VSI using Red Hat OpenJDK 21.
+FROM registry.access.redhat.com/ubi9/openjdk-21-runtime:1.21
+
+WORKDIR /app
+USER 185
+
+COPY target/ms-c-1.0.0-SNAPSHOT.jar /app/app.jar
+
+ENV PORT=8080 \
+    BIND_HOST=0.0.0.0 \
+    MS_A_URL=http://ms-a.osm-poc-demo.svc.cluster.local:8080
+
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

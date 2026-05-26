@@ -1,0 +1,74 @@
+# Purpose: Expose istiod through the east-west gateway for VSI ztunnel xDS/certs.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: istiod-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: eastwestgateway
+  servers:
+    - port:
+        number: 15012
+        name: tls-xds
+        protocol: TLS
+      tls:
+        mode: PASSTHROUGH
+      hosts:
+        - istiod.istio-system.svc
+    - port:
+        number: 15017
+        name: tls-webhook
+        protocol: TLS
+      tls:
+        mode: PASSTHROUGH
+      hosts:
+        - istiod.istio-system.svc
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: istiod-vs
+  namespace: istio-system
+spec:
+  hosts:
+    - istiod.istio-system.svc
+  gateways:
+    - istiod-gateway
+  tls:
+    - match:
+        - port: 15012
+          sniHosts:
+            - "*"
+      route:
+        - destination:
+            host: istiod.istio-system.svc.cluster.local
+            port:
+              number: 15012
+    - match:
+        - port: 15017
+          sniHosts:
+            - "*"
+      route:
+        - destination:
+            host: istiod.istio-system.svc.cluster.local
+            port:
+              number: 443
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: cross-network-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: eastwestgateway
+  servers:
+    - port:
+        number: 15008
+        name: tls-hbone
+        protocol: TLS
+      tls:
+        mode: PASSTHROUGH
+      hosts:
+        - "*.local"

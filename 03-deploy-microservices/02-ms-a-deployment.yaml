@@ -1,0 +1,56 @@
+# Purpose: ms-a Deployment — may call ms-b only; receives calls from ms-c only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ms-a
+  namespace: osm-poc-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ms-a
+  namespace: osm-poc-demo
+  labels:
+    app: ms-a
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ms-a
+  template:
+    metadata:
+      labels:
+        app: ms-a
+        version: v1
+        ambient.istio.io/redirection: enabled
+    spec:
+      serviceAccountName: ms-a
+      containers:
+        - name: ms-a
+          image: quay.io/${QUAY_ORG}/osm-poc-ms-a:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: MS_B_URL
+              value: "http://ms-b.osm-poc-demo.svc.cluster.local:8080"
+            - name: LOG_FORMAT
+              value: "json"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Djava.util.logging.config.file=/dev/null"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10

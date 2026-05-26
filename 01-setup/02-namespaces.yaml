@@ -1,0 +1,19 @@
+# Purpose: Namespaces for Istio control plane, CNI, and ztunnel DaemonSet.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    istio-discovery: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-cni
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ztunnel
+  labels:
+    istio-discovery: enabled

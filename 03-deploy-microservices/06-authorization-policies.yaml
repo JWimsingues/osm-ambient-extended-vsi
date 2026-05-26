@@ -1,0 +1,48 @@
+# Purpose: L4 AuthorizationPolicy — enforce A->B, B->C, C->A only (ambient ztunnel).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ms-b-allow-from-a
+  namespace: osm-poc-demo
+spec:
+  selector:
+    matchLabels:
+      app: ms-b
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/osm-poc-demo/sa/ms-a
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ms-c-allow-from-b
+  namespace: osm-poc-demo
+spec:
+  selector:
+    matchLabels:
+      app: ms-c
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/osm-poc-demo/sa/ms-b
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ms-a-allow-from-c
+  namespace: osm-poc-demo
+spec:
+  selector:
+    matchLabels:
+      app: ms-a
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/osm-poc-demo/sa/ms-c

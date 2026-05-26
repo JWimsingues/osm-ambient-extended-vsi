@@ -1,0 +1,17 @@
+# Purpose: Install the Sail / OpenShift Service Mesh operator via OLM.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-operators
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: redhat-openshift-service-mesh
+  namespace: openshift-operators
+spec:
+  channel: stable-3.2
+  installPlanApproval: Automatic
+  name: redhat-openshift-service-mesh
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

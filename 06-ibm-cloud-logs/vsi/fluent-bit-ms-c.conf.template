@@ -1,0 +1,44 @@
+# Purpose: Fluent Bit snippet — ship ms-c Podman logs to IBM Cloud Logs.
+# Copy to fluent-bit-ms-c.conf and set env vars, or let install-logs-agent-vsi.sh substitute.
+
+[PARSER]
+    Name        osm_poc_json
+    Format      json
+    Time_Key    timestamp
+    Time_Format %Y-%m-%dT%H:%M:%S.%LZ
+
+[INPUT]
+    Name              tail
+    Path              /var/log/osm-poc/ms-c.log
+    Tag               osm.ms-c
+    Parser            osm_poc_json
+    Refresh_Interval  5
+    Mem_Buf_Limit     5MB
+    Skip_Long_Lines   On
+
+[INPUT]
+    Name              tail
+    Path              /var/log/osm-poc/ztunnel.log
+    Tag               osm.ztunnel
+    Refresh_Interval  5
+    Mem_Buf_Limit     5MB
+    Skip_Long_Lines   On
+
+[FILTER]
+    Name    modify
+    Match   osm.*
+    Add     kubernetes.cluster_name ${CLUSTER_NAME}
+    Add     host vsi-ms-c
+    Add     source vsi
+
+[OUTPUT]
+    Name                 http
+    Match                osm.*
+    Host                 ${INGESTION_HOST}
+    Port                 ${INGESTION_PORT}
+    URI                  /logs/v1/singles
+    Format               json
+    Header               Authorization Bearer ${IAM_API_KEY}
+    Header               Content-Type application/json
+    tls                  On
+    tls.verify           On
