@@ -23,10 +23,20 @@ This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Servic
 2. Verify OVN-Kubernetes routing (cluster-admin):
 
    ```bash
-   oc get network.operator cluster -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost}{"\n"}'
+   oc get network.operator cluster -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost}'; echo
    ```
 
    Expected: `true`. If not, follow [Configuring OVN-Kubernetes for ambient mode](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode).
+
+   If the command prints **false**, apply this remediation:
+
+   ```bash
+   oc patch networks.operator.openshift.io cluster --type=merge -p \
+     '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"routingViaHost": true}}}}}'
+   oc get clusteroperator network -w
+   oc get pods -n openshift-ovn-kubernetes -l app=ovnkube-node
+   oc get network.operator cluster -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost}'; echo
+   ```
 
 3. Install the Red Hat OpenShift Service Mesh / Sail Operator:
 
@@ -35,7 +45,7 @@ This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Servic
    oc wait --for=condition=Available subscription/redhat-openshift-service-mesh -n openshift-operators --timeout=600s
    ```
 
-4. Create mesh infrastructure namespaces:
+4. Create mesh infrastructure namespaces (labeled `istio-discovery=enabled` for istiod discovery in step 2):
 
    ```bash
    oc apply -f 02-namespaces.yaml
