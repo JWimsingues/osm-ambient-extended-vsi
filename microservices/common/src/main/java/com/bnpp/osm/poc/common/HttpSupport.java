@@ -24,13 +24,21 @@ public final class HttpSupport {
                 .header(TraceLog.TRACE_HEADER, traceId)
                 .GET()
                 .build();
-        HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-        TraceLog.info(
-                service,
-                traceId,
-                action,
-                "HTTP GET <- status=" + response.statusCode() + " body=" + truncate(response.body()));
-        return response.body();
+        try {
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            TraceLog.info(
+                    service,
+                    traceId,
+                    action,
+                    "HTTP GET <- status=" + response.statusCode() + " body=" + truncate(response.body()));
+            return response.body();
+        } catch (IOException e) {
+            String detail = e.getMessage();
+            if (detail == null || detail.isBlank()) {
+                detail = e.getClass().getSimpleName();
+            }
+            throw new IOException("GET " + url + " failed: " + detail, e);
+        }
     }
 
     private static String truncate(String body) {
