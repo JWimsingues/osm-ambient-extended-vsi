@@ -1,8 +1,13 @@
 # Purpose: Cluster-wide ztunnel DaemonSet (L4 mTLS, HBONE on port 15008).
-apiVersion: sailoperator.io/v1alpha1
+apiVersion: sailoperator.io/v1
 kind: ZTunnel
 metadata:
   name: default
 spec:
   namespace: ztunnel
   profile: ambient
+  values:
+    ztunnel:
+      multiCluster:
+        # Must match Istio spec.values.global.multiCluster.clusterName (rocks-cluster).
+        clusterName: rocks-cluster

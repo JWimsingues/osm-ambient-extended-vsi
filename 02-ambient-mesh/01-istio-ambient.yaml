@@ -16,3 +16,7 @@ spec:
       trustedZtunnelNamespace: ztunnel
       env:
         PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION: "true"
+    meshConfig:
+      discoverySelectors:
+        - matchLabels:
+            istio-discovery: enabled

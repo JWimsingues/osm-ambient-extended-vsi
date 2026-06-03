@@ -11,6 +11,7 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
 - Replace placeholders in manifests:
   - `MESH_ID` (default `mesh1`)
   - East-west gateway public IP / DNS after LoadBalancer is provisioned
+- Namespaces included in mesh discovery must carry `istio-discovery=enabled` (see `01-setup/02-namespaces.yaml`, `03-deploy-microservices/01-namespace.yaml`). `01-istio-ambient.yaml` scopes istiod with matching `discoverySelectors`.
 
 ## Steps
 
@@ -48,12 +49,14 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
    echo "EW_GATEWAY_HOST=${EW_GATEWAY_HOST}"
    ```
 
-5. Label the application project for ambient dataplane (created in step 3 if not already):
+5. Label the application project for ambient dataplane (if `03-deploy-microservices` is not applied yet, or labels were missing):
 
    ```bash
    oc label namespace osm-poc-demo istio.io/dataplane-mode=ambient --overwrite
    oc label namespace osm-poc-demo istio-discovery=enabled --overwrite
    ```
+
+   Both labels are already set in `03-deploy-microservices/01-namespace.yaml`; `istio-discovery=enabled` is required for `discoverySelectors` on the `Istio` CR.
 
 6. Verify ztunnel sees cluster nodes:
 
