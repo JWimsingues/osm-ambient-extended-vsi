@@ -26,6 +26,10 @@ export IMAGE_TAG=latest
 
 Requires `podman` (or set `CONTAINER_CMD=docker`) and Quay credentials (`podman login quay.io`).
 
+Images are built for **`linux/amd64`** by default (`BUILD_PLATFORM`), matching typical ROCKS worker nodes. If you build on Apple Silicon without that flag, the image is `arm64` and OpenShift fails with `Exec format error` on `/usr/bin/java`. Override only if your cluster is ARM, for example `export BUILD_PLATFORM=linux/arm64`.
+
+After pushing, grant the OpenShift cluster access: either make the `osm-poc-ms-*` repositories public in Quay, or add an `imagePullSecret` in `osm-poc-demo` (see [`03-deploy-microservices/README.md`](../03-deploy-microservices/README.md)).
+
 ## Log format
 
 Set `LOG_FORMAT=json` (default in OpenShift Deployments) for IBM Cloud Logs:
