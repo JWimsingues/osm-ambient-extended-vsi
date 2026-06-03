@@ -14,8 +14,9 @@ touch "${LOG_DIR}/ms-c.log"
 chmod 644 "${LOG_DIR}/ms-c.log"
 
 podman rm -f ms-c 2>/dev/null || true
+# Host network so ztunnel (also host network) can capture DNS and L4 for ms-c.
 podman run -d --name ms-c --restart=always \
-  -p 127.0.0.1:8080:8080 \
+  --network host \
   -e BIND_HOST=0.0.0.0 \
   -e LOG_FORMAT=json \
   -e MS_A_URL="${MS_A_URL}" \
