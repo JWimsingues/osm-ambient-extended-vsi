@@ -21,6 +21,7 @@ spec:
     network: vsi-network
 ---
 apiVersion: networking.istio.io/v1
+# metadata.name must match PROXY_WORKLOAD_INFO on the VSI (osm-poc-demo/<name>/ms-c).
 kind: WorkloadEntry
 metadata:
   name: ms-c-vsi
@@ -29,7 +30,7 @@ metadata:
     app: ms-c
     version: v1
 spec:
-  address: VSI_PRIVATE_IP
+  address: 10.243.64.9
   labels:
     app: ms-c
     version: v1
@@ -38,6 +39,27 @@ spec:
   serviceAccount: ms-c
   ports:
     http: 8080
+---
+# Binds the ClusterIP Service VIP to the VSI IP. Required for ambient ztunnel: a Service
+# without selector has no kube-proxy endpoints; istioctl shows 0/0 until this exists.
+# (ServiceEntry + workloadSelector alone is not enough — VIP must map to the backend.)
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ms-c-vsi
+  namespace: osm-poc-demo
+  labels:
+    kubernetes.io/service-name: ms-c
+addressType: IPv4
+ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "10.243.64.9" # same as WorkloadEntry spec.address (VSI_PRIVATE_IP)
+    conditions:
+      ready: true
 ---
 apiVersion: v1
 kind: Service
