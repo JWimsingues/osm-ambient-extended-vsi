@@ -9,20 +9,61 @@ Onboards **ms-c** running on an IBM Cloud VSI into the ROCKS ambient mesh by ins
 - Steps 1–3 completed; `EW_GATEWAY_HOST` recorded from step 2
 - RHEL 9.x VSI with outbound connectivity to the east-west gateway (TCP `15012`, `15017`, `15008`)
 - Inbound from cluster to VSI on TCP `8080` (and `15008` if required by your network design)
-- `istioctl` on your workstation; `root` or `sudo` on the VSI
+- `istioctl` on your workstation; `sudo` on the VSI (default login is not root)
 - ztunnel binary matching your OSM/Istio version (from the cluster or [Istio ztunnel release](https://github.com/istio/ztunnel))
+- IBM Cloud VPC security group rules updated so you can SSH to the VSI (see step 1)
 
 ## Steps
 
-### 1. Prepare the VSI (OS packages)
+### 1. Allow SSH from your workstation (IBM Cloud VPC)
+
+In the VPC security group attached to the VSI, add an **inbound** rule:
+
+| Field | Value |
+| --- | --- |
+| Protocol | TCP |
+| Port range | Minimum **22** / Maximum **22** |
+| Source type | CIDR block |
+| Source | Your public IP with `/32` (for example `203.0.113.10/32`) |
+
+To discover your public IP from a local terminal:
 
 ```bash
-ssh root@VSI_PUBLIC_IP
-dnf install -y podman java-21-openjdk-headless
-useradd --system --gid 1000 --home-dir /var/lib/istio istio-proxy 2>/dev/null || true
+curl -s ifconfig.me && echo
 ```
 
-### 2. Generate workload onboarding files (workstation)
+For short-lived lab testing only, you may use `0.0.0.0/0` (anywhere). Restricting to your own `/32` is strongly recommended.
+
+Also allow mesh traffic as needed (step 8): inbound TCP **15008** (HBONE) and **8080** from the cluster network.
+
+### 2. Connect to the VSI (RHEL default user `vpcuser`)
+
+On your workstation, restrict the SSH private key permissions and connect. Replace placeholders with your key path and VSI public IP.
+
+```bash
+chmod 400 <path-to-your-key>.prv
+ssh -i <path-to-your-key>.prv vpcuser@<VSI_PUBLIC_IP>
+```
+
+RHEL images on IBM Cloud use **`vpcuser`**, not `root`. See [Connecting to a Linux VSI](https://cloud.ibm.com/docs/vpc?topic=vpc-vsi_is_connecting_linux&interface=ui).
+
+Example:
+
+```bash
+chmod 400 jwimsing_rsa.prv
+ssh -i jwimsing_rsa.prv vpcuser@161.156.86.195
+```
+
+Use `sudo` for package installation and systemd on the VSI.
+
+### 3. Prepare the VSI (OS packages)
+
+```bash
+sudo dnf install -y podman java-21-openjdk-headless
+sudo useradd --system --gid 1000 --home-dir /var/lib/istio istio-proxy 2>/dev/null || true
+```
+
+### 4. Generate workload onboarding files (workstation)
 
 ```bash
 cd 04-vsi-ztunnel
@@ -30,16 +71,18 @@ export EW_GATEWAY_HOST="<east-west-gateway-hostname>"
 export VSI_PRIVATE_IP="<vsi-private-ip>"
 
 oc apply -f ../03-deploy-microservices/05-workload-c.yaml
-# Edit WorkloadEntry address if not done already
+# Edit WorkloadEntry address in 05-workload-c.yaml if not set already
 
 istioctl x workload entry configure \
   -f ../03-deploy-microservices/05-workload-c.yaml \
   --clusterID rocks-cluster \
   -o ./vsi-onboarding \
-  --tokenDuration=24h
+  --tokenDuration=86400
 ```
 
-### 3. Install ztunnel on the VSI
+`--tokenDuration` must be an **integer number of seconds** (not `24h`). `86400` is 24 hours. Default is `3600` (1 hour).
+
+### 5. Install ztunnel on the VSI
 
 Copy `scripts/install-ztunnel.sh` and onboarding artifacts to the VSI, set `EW_GATEWAY_HOST`, then run:
 
@@ -49,37 +92,39 @@ export ZTUNNEL_VERSION="1.24.2"   # align with your Istio/OSM version
 sudo -E ./install-ztunnel.sh
 ```
 
-### 4. Configure `/etc/hosts` for istiod via east-west gateway
+### 6. Configure `/etc/hosts` for istiod via east-west gateway
 
 ```bash
 echo "${EW_GATEWAY_HOST} istiod.istio-system.svc" | sudo tee -a /etc/hosts
 ```
 
-### 5. Start ztunnel (systemd)
+### 7. Start ztunnel (systemd)
 
 ```bash
-sudo cp vsi-onboarding/* /var/lib/istio/ztunnel/  # per install script layout
+sudo cp vsi-onboarding/* /var/lib/istio/ztunnel/
 sudo systemctl enable --now ztunnel
 sudo systemctl status ztunnel
 ```
 
-### 6. Deploy ms-c container on the VSI
+### 8. Deploy ms-c container on the VSI
 
 ```bash
 export QUAY_ORG=your-quay-org
 export IMAGE_TAG=latest
 export MS_A_URL="http://ms-a.osm-poc-demo.svc.cluster.local:8080"
 
-podman run -d --name ms-c --restart=always \
+sudo podman run -d --name ms-c --restart=always \
   -p 127.0.0.1:8080:8080 \
   -e MS_A_URL="${MS_A_URL}" \
   -e BIND_HOST=0.0.0.0 \
   quay.io/${QUAY_ORG}/osm-poc-ms-c:${IMAGE_TAG}
 ```
 
+If the image is private, run `sudo podman login quay.io` on the VSI first (or use a pull secret workflow).
+
 Expose on localhost for local demos (`curl localhost:8080/health`). Mesh traffic arrives via ztunnel redirection on port 8080.
 
-### 7. Verify mesh connectivity
+### 9. Verify mesh connectivity
 
 From the cluster:
 
@@ -96,7 +141,7 @@ From the VSI:
 curl -s http://127.0.0.1:8080/api/call-a -H "X-Trace-Id: manual-vsi-test"
 ```
 
-### 8. Network policy reminder
+### 10. Network policy reminder
 
 Allow **inbound TCP 15008** (HBONE) and **8080** on the VSI security group / firewall. See [Configuring network policies for ambient mode](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-configuring-network-policies-ambient).
 
@@ -113,6 +158,7 @@ istioctl ztunnel-config workloads -n ztunnel | grep ms-c
 - [Istio ambient mode (OSM 3.2)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode)
 - [Integrate Linux VMs into OpenShift Service Mesh](https://developers.redhat.com/articles/2026/04/17/integrate-red-hat-enterprise-linux-vms-openshift-service-mesh)
 - [WorkloadEntry](https://istio.io/latest/docs/reference/config/networking/workload-entry/)
+- [Connecting to a Linux VSI (IBM Cloud)](https://cloud.ibm.com/docs/vpc?topic=vpc-vsi_is_connecting_linux&interface=ui)
 
 ## Alternatives Considered
 

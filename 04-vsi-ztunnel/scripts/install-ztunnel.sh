@@ -51,6 +51,7 @@ Group=istio-proxy
 Environment=PROXY_MODE=dedicated
 Environment=CA_ADDRESS=istiod.istio-system.svc:15012
 Environment=XDS_ADDRESS=istiod.istio-system.svc:15012
+Environment=ISTIO_META_CLUSTER_ID=rocks-cluster
 Environment=CLUSTER_ID=rocks-cluster
 Environment=ISTIO_META_ENABLE_HBONE=true
 Environment=ISTIO_META_DNS_CAPTURE=true
