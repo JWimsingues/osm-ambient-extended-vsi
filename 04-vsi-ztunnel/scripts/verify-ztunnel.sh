@@ -36,17 +36,18 @@ EW_GATEWAY_CONFIG=/etc/istio/ew-gateway.env
 if [[ -f "${EW_GATEWAY_CONFIG}" ]]; then
   # shellcheck source=/dev/null
   source "${EW_GATEWAY_CONFIG}"
-  if [[ -n "${EW_GATEWAY_HOST:-}" ]]; then
-    if [[ "${EW_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      expected_ip="${EW_GATEWAY_HOST}"
+  istiod_host="${ISTIOD_GATEWAY_HOST:-${EW_GATEWAY_HOST:-}}"
+  if [[ -n "${istiod_host}" ]]; then
+    if [[ "${istiod_host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      expected_ip="${istiod_host}"
     else
-      expected_ip="$(getent ahostsv4 "${EW_GATEWAY_HOST}" | awk '{print $1; exit}')"
+      expected_ip="$(getent ahostsv4 "${istiod_host}" | awk '{print $1; exit}')"
     fi
     hosts_ip="$(getent hosts istiod.istio-system.svc | awk '{print $1; exit}')"
     if [[ -n "${expected_ip}" && -n "${hosts_ip}" && "${expected_ip}" == "${hosts_ip}" ]]; then
-      ok "istiod /etc/hosts -> ${hosts_ip} (matches ${EW_GATEWAY_HOST})"
+      ok "istiod /etc/hosts -> ${hosts_ip} (matches ${istiod_host})"
     else
-      err "istiod /etc/hosts (${hosts_ip:-missing}) != resolved EW IP (${expected_ip:-missing}) — sudo systemctl restart ztunnel"
+      err "istiod /etc/hosts (${hosts_ip:-missing}) != resolved istiod LB IP (${expected_ip:-missing}) — sudo systemctl restart ztunnel"
     fi
   fi
 fi

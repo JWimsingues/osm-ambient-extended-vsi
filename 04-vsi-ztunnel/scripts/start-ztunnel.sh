@@ -5,18 +5,22 @@ set -euo pipefail
 EW_GATEWAY_CONFIG=/etc/istio/ew-gateway.env
 # shellcheck source=/dev/null
 [[ -f "${EW_GATEWAY_CONFIG}" ]] && source "${EW_GATEWAY_CONFIG}"
-: "${EW_GATEWAY_HOST:?EW_GATEWAY_HOST not set in ${EW_GATEWAY_CONFIG}}"
+# xDS/CA uses istiod LB (06-expose-istiod-lb.yaml); HBONE multi-network uses east-west gateway separately.
+: "${ISTIOD_GATEWAY_HOST:=${EW_GATEWAY_HOST:-}}"
+: "${ISTIOD_GATEWAY_HOST:?ISTIOD_GATEWAY_HOST or EW_GATEWAY_HOST must be set in ${EW_GATEWAY_CONFIG}}"
 
 : "${ZTUNNEL_IMAGE:=docker.io/istio/ztunnel:1.28.6}"
 : "${PROXY_WORKLOAD_INFO:=osm-poc-demo/ms-c-vsi/ms-c}"
 
-if [[ "${EW_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  EW_GATEWAY_IP="${EW_GATEWAY_HOST}"
+if [[ -n "${ISTIOD_GATEWAY_IP:-}" ]]; then
+  EW_GATEWAY_IP="${ISTIOD_GATEWAY_IP}"
+elif [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  EW_GATEWAY_IP="${ISTIOD_GATEWAY_HOST}"
 else
-  EW_GATEWAY_IP="$(getent ahostsv4 "${EW_GATEWAY_HOST}" | awk '{print $1; exit}')"
+  EW_GATEWAY_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" | awk '{print $1; exit}')"
 fi
 if [[ -z "${EW_GATEWAY_IP}" ]]; then
-  echo "ERROR: cannot resolve EW_GATEWAY_HOST=${EW_GATEWAY_HOST}" >&2
+  echo "ERROR: cannot resolve ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}" >&2
   exit 1
 fi
 
@@ -44,8 +48,10 @@ exec /usr/bin/podman run --rm --name ztunnel \
   -e SERVICE_ACCOUNT=ms-c \
   -e ISTIO_META_SERVICE_ACCOUNT=ms-c \
   -e ISTIO_META_NETWORK=vsi-network \
-  -e CA_ADDRESS=istiod.istio-system.svc:15012 \
-  -e XDS_ADDRESS=istiod.istio-system.svc:15012 \
+  -e CA_ADDRESS="${EW_GATEWAY_IP}:15012" \
+  -e XDS_ADDRESS="${EW_GATEWAY_IP}:15012" \
+  -e ALT_XDS_HOSTNAME=istiod.istio-system.svc \
+  -e ALT_CA_HOSTNAME=istiod.istio-system.svc \
   -e XDS_ROOT_CA=/var/run/secrets/istio/root-cert.pem \
   -e CA_ROOT_CA=/var/run/secrets/istio/root-cert.pem \
   -e ISTIO_META_CLUSTER_ID=rocks-cluster \

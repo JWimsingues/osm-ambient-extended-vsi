@@ -13,7 +13,8 @@ spec:
       multiCluster:
         clusterName: rocks-cluster
       meshNetworks:
-        vsi-network:
+        # Reach cluster workloads (main-network) via east-west HBONE gateway.
+        main-network:
           endpoints:
             - fromRegistry: rocks-cluster
           gateways:

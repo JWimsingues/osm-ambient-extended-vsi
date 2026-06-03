@@ -39,6 +39,8 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
    oc apply -f 04-eastwest-gateway.yaml
    oc -n istio-system rollout status deploy/istio-eastwestgateway --timeout=5m
    oc apply -f 05-expose-istiod.yaml
+   oc apply -f 06-expose-istiod-lb.yaml
+   oc -n istio-system rollout status deploy/istiod --timeout=5m
    ```
 
 4. Record the east-west gateway address (used on the VSI):
@@ -46,8 +48,13 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
    ```bash
    export EW_GATEWAY_HOST=$(oc -n istio-system get svc istio-eastwestgateway \
      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+   export ISTIOD_GATEWAY_HOST=$(oc -n istio-system get svc istiod-xds-external \
+     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
    echo "EW_GATEWAY_HOST=${EW_GATEWAY_HOST}"
+   echo "ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}"
    ```
+
+   `meshNetworks` must define **main-network** (not `vsi-network`) so VSI ztunnel routes cross-network traffic through the east-west gateway on port **15008**, not directly to pod IPs.
 
 5. Label the application project for ambient dataplane (if `03-deploy-microservices` is not applied yet, or labels were missing):
 

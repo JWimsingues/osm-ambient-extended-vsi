@@ -1,0 +1,20 @@
+# Purpose: Direct public LB to istiod :15012 for VSI ztunnel xDS (bypasses east-west Envoy passthrough).
+# Use when the east-west gateway returns TLS handshake EOF for external ztunnel clients.
+# Set EW_GATEWAY_HOST to this Service LB hostname when generating VSI onboarding.
+apiVersion: v1
+kind: Service
+metadata:
+  name: istiod-xds-external
+  namespace: istio-system
+  labels:
+    istio: istiod
+    app: istiod
+spec:
+  type: LoadBalancer
+  selector:
+    app: istiod
+  ports:
+    - name: tcp-xds
+      port: 15012
+      targetPort: 15012
+      protocol: TCP

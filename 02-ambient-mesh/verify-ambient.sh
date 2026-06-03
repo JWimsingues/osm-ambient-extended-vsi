@@ -16,6 +16,11 @@ if [[ -n "${meshnets}" && "${meshnets}" != "{}" && "${meshnets}" != "null" ]]; t
 else
   err "meshNetworks missing — run: oc apply -f 01-istio-ambient.yaml"
 fi
+if echo "${meshnets}" | grep -q 'main-network'; then
+  ok "meshNetworks defines main-network (east-west HBONE for VSI outbound)"
+else
+  err "meshNetworks must key main-network (not vsi-network) — re-apply 01-istio-ambient.yaml"
+fi
 
 multi="$(oc -n istio-system get deploy istiod -o json \
   | python3 -c "import sys,json; env={e['name']:e.get('value','') for e in json.load(sys.stdin)['spec']['template']['spec']['containers'][0]['env']}; print(env.get('AMBIENT_ENABLE_MULTI_NETWORK',''))" 2>/dev/null || true)"

@@ -31,11 +31,16 @@ EOF
   exit 1
 fi
 
-export EW_GATEWAY_HOST
+: "${ISTIOD_GATEWAY_HOST:=${EW_GATEWAY_HOST}}"
+export EW_GATEWAY_HOST ISTIOD_GATEWAY_HOST
 install -d -m 0755 /etc/istio
-printf 'EW_GATEWAY_HOST=%q\n' "${EW_GATEWAY_HOST}" >"${EW_GATEWAY_CONFIG}"
+cat >"${EW_GATEWAY_CONFIG}" <<EOF
+EW_GATEWAY_HOST=${EW_GATEWAY_HOST}
+ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}
+EOF
 chmod 0644 "${EW_GATEWAY_CONFIG}"
-echo "==> Using EW_GATEWAY_HOST=${EW_GATEWAY_HOST} (saved in ${EW_GATEWAY_CONFIG})"
+echo "==> EW_GATEWAY_HOST=${EW_GATEWAY_HOST} (HBONE / meshNetworks)"
+echo "==> ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} (xDS/CA, saved in ${EW_GATEWAY_CONFIG})"
 # Align with OSM 3.3 / Istio 1.28.6 (accept "1.28.6" or "v1.28.6").
 : "${ZTUNNEL_VERSION:=1.28.6}"
 : "${ONBOARD_DIR:=/home/vpcuser/vsi-onboarding}"
@@ -61,7 +66,14 @@ echo "==> Pulling ztunnel ${ZTUNNEL_IMAGE_TAG} from ${ZTUNNEL_IMAGE}"
 # Run ztunnel in the official image (do not copy the binary to the host). The image is built
 # with a newer glibc than many IBM Cloud RHEL 9 VSIs provide; extracting /usr/local/bin/ztunnel
 # fails at runtime with "GLIBC_2.38 not found".
-podman pull "${ZTUNNEL_IMAGE}"
+if ! podman image exists "${ZTUNNEL_IMAGE}" 2>/dev/null; then
+  podman pull "${ZTUNNEL_IMAGE}" || {
+    echo "ERROR: cannot pull ${ZTUNNEL_IMAGE} and image is not cached locally" >&2
+    exit 1
+  }
+else
+  echo "==> Using cached image ${ZTUNNEL_IMAGE}"
+fi
 
 if [[ -d "${ONBOARD_DIR}" ]]; then
   echo "==> Copying onboarding files from ${ONBOARD_DIR}"
@@ -96,9 +108,14 @@ fi
 
 SCRIPT_SRC="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_SRC}")"
-install -m 0755 "${SCRIPT_DIR}/setup-ztunnel-redirect.sh" /usr/local/bin/setup-ztunnel-redirect.sh
-install -m 0755 "${SCRIPT_DIR}/verify-ztunnel.sh" /usr/local/bin/verify-ztunnel.sh
-install -m 0755 "${SCRIPT_DIR}/start-ztunnel.sh" /usr/local/bin/start-ztunnel.sh
+# When re-run from /usr/local/bin, helper scripts live next to the copy in /home/vpcuser.
+HELPER_DIR="${SCRIPT_DIR}"
+if [[ "${SCRIPT_DIR}" == /usr/local/bin && -f /home/vpcuser/start-ztunnel.sh ]]; then
+  HELPER_DIR=/home/vpcuser
+fi
+for helper in setup-ztunnel-redirect.sh verify-ztunnel.sh start-ztunnel.sh; do
+  [[ -f "${HELPER_DIR}/${helper}" ]] && install -m 0755 "${HELPER_DIR}/${helper}" "/usr/local/bin/${helper}"
+done
 
 if [[ ! -f /etc/istio/service-cidr.env ]]; then
   echo 'SERVICE_CIDR=172.21.0.0/16' >/etc/istio/service-cidr.env
@@ -132,17 +149,17 @@ if [[ ! -f /var/run/secrets/tokens/istio-token ]]; then
   echo "WARN: /var/run/secrets/tokens/istio-token missing — ztunnel may fail after TLS connects" >&2
 fi
 
-echo "==> Mapping istiod to east-west gateway (resolve LB hostname to IP for /etc/hosts)"
-if [[ "${EW_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  EW_GATEWAY_IP="${EW_GATEWAY_HOST}"
+echo "==> Mapping istiod to xDS LoadBalancer (resolve hostname to IP for /etc/hosts)"
+if [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  EW_GATEWAY_IP="${ISTIOD_GATEWAY_HOST}"
 else
-  EW_GATEWAY_IP="$(getent ahostsv4 "${EW_GATEWAY_HOST}" | awk '{print $1; exit}')"
+  EW_GATEWAY_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" | awk '{print $1; exit}')"
   if [[ -z "${EW_GATEWAY_IP}" ]]; then
-    echo "ERROR: cannot resolve EW_GATEWAY_HOST=${EW_GATEWAY_HOST} to an IPv4 address" >&2
+    echo "ERROR: cannot resolve ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} to an IPv4 address" >&2
     exit 1
   fi
 fi
-echo "    ${EW_GATEWAY_HOST} -> ${EW_GATEWAY_IP}"
+echo "    ${ISTIOD_GATEWAY_HOST} -> ${EW_GATEWAY_IP}"
 grep -v 'istiod\.istio-system\.svc' /etc/hosts > /etc/hosts.tmp || true
 mv /etc/hosts.tmp /etc/hosts
 cat >>/etc/hosts <<HOSTS
