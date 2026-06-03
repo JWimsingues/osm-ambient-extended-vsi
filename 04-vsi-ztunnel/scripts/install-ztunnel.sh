@@ -72,9 +72,40 @@ if [[ -d "${ONBOARD_DIR}" ]]; then
     cp "${ONBOARD_DIR}/root-cert.pem" /etc/certs/root-cert.pem
   fi
   [[ -f "${ONBOARD_DIR}/istio-token" ]] && cp "${ONBOARD_DIR}/istio-token" /var/run/secrets/tokens/istio-token
-  [[ -f "${ONBOARD_DIR}/mesh.yaml" ]] && cp "${ONBOARD_DIR}/mesh.yaml" /etc/istio/config/mesh
-  [[ -f "${ONBOARD_DIR}/cluster.env" ]] && cp "${ONBOARD_DIR}/cluster.env" /var/lib/istio/ztunnel/cluster.env
+  if [[ -f "${ONBOARD_DIR}/mesh.yaml" ]]; then
+    cp "${ONBOARD_DIR}/mesh.yaml" /etc/istio/config/mesh
+    sed -i 's/ISTIO_META_NETWORK: ""/ISTIO_META_NETWORK: "vsi-network"/' /etc/istio/config/mesh
+    sed -i 's/SERVICE_ACCOUNT: default/SERVICE_ACCOUNT: ms-c/' /etc/istio/config/mesh
+  fi
+  if [[ -f "${ONBOARD_DIR}/cluster.env" ]]; then
+    cp "${ONBOARD_DIR}/cluster.env" /var/lib/istio/ztunnel/cluster.env
+    sed -i "s/ISTIO_META_NETWORK=''/ISTIO_META_NETWORK='vsi-network'/" /var/lib/istio/ztunnel/cluster.env
+    sed -i "s/SERVICE_ACCOUNT='default'/SERVICE_ACCOUNT='ms-c'/" /var/lib/istio/ztunnel/cluster.env
+  fi
+  if [[ -f "${ONBOARD_DIR}/hosts" ]]; then
+    grep -v 'istiod\.istio-system\.svc' /etc/hosts > /etc/hosts.tmp || true
+    mv /etc/hosts.tmp /etc/hosts
+    cat "${ONBOARD_DIR}/hosts" >>/etc/hosts
+    grep -q 'istiod.istio-system.svc.cluster.local' /etc/hosts || \
+      sed 's/istiod\.istio-system\.svc$/& istiod.istio-system.svc.cluster.local/' -i /etc/hosts
+  fi
+  if [[ -f "${ONBOARD_DIR}/service.env" ]]; then
+    cp "${ONBOARD_DIR}/service.env" /etc/istio/service-cidr.env
+  fi
 fi
+
+SCRIPT_SRC="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "${SCRIPT_SRC}")"
+install -m 0755 "${SCRIPT_DIR}/setup-ztunnel-redirect.sh" /usr/local/bin/setup-ztunnel-redirect.sh
+install -m 0755 "${SCRIPT_DIR}/verify-ztunnel.sh" /usr/local/bin/verify-ztunnel.sh
+install -m 0755 "${SCRIPT_DIR}/start-ztunnel.sh" /usr/local/bin/start-ztunnel.sh
+
+if [[ ! -f /etc/istio/service-cidr.env ]]; then
+  echo 'SERVICE_CIDR=172.21.0.0/16' >/etc/istio/service-cidr.env
+  echo "WARN: ${ONBOARD_DIR}/service.env missing — using default SERVICE_CIDR=172.21.0.0/16" >&2
+  echo "      Regenerate onboarding with generate-vsi-onboarding.sh for your cluster CIDR." >&2
+fi
+chmod 0644 /etc/istio/service-cidr.env
 
 if [[ ! -f /var/run/secrets/istio/root-cert.pem ]]; then
   cat >&2 <<EOF
@@ -120,7 +151,7 @@ HOSTS
 
 chown -R istio-proxy:istio-proxy /var/lib/istio /var/run/secrets /etc/certs /etc/istio
 
-echo "==> Installing systemd unit (podman, host network)"
+echo "==> Installing systemd unit (start-ztunnel.sh resolves EW LB IP on each start)"
 cat >/etc/systemd/system/ztunnel.service <<EOF
 [Unit]
 Description=Istio ztunnel (ambient) for OSM PoC
@@ -129,46 +160,9 @@ Wants=network-online.target
 
 [Service]
 Environment=ZTUNNEL_IMAGE=${ZTUNNEL_IMAGE}
-Environment=PROXY_MODE=dedicated
 Environment=PROXY_WORKLOAD_INFO=${PROXY_WORKLOAD_INFO}
-Environment=NETWORK=vsi-network
-Environment=CA_ADDRESS=istiod.istio-system.svc:15012
-Environment=XDS_ADDRESS=istiod.istio-system.svc:15012
-Environment=ISTIO_META_CLUSTER_ID=rocks-cluster
-Environment=CLUSTER_ID=rocks-cluster
-Environment=ISTIO_META_ENABLE_HBONE=true
-Environment=ISTIO_META_DNS_CAPTURE=true
-Environment=ISTIO_META_DNS_AUTO_ALLOCATE=true
-Environment=ISTIO_META_DNS_PROXY_ADDR=127.0.0.1:15053
-Environment=RUST_LOG=info
 ExecStartPre=-/usr/bin/podman rm -f ztunnel
-ExecStart=/usr/bin/podman run --rm --name ztunnel \\
-  --network host \\
-  --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_ADMIN \\
-  -v /var/lib/istio:/var/lib/istio \\
-  -v /var/run/secrets/tokens:/var/run/secrets/tokens \\
-  -v /var/run/secrets/istio:/var/run/secrets/istio \\
-  -v /etc/certs:/etc/certs \\
-  -v /etc/istio/config:/etc/istio/config \\
-  -v /etc/istio/proxy:/etc/istio/proxy \\
-  -v /etc/hosts:/etc/hosts:ro \\
-  --add-host istiod.istio-system.svc:${EW_GATEWAY_IP} \\
-  --add-host istiod.istio-system.svc.cluster.local:${EW_GATEWAY_IP} \\
-  -e PROXY_MODE=dedicated \\
-  -e PROXY_WORKLOAD_INFO=${PROXY_WORKLOAD_INFO} \\
-  -e NETWORK=vsi-network \\
-  -e CA_ADDRESS=istiod.istio-system.svc:15012 \\
-  -e XDS_ADDRESS=istiod.istio-system.svc:15012 \\
-  -e XDS_ROOT_CA=/var/run/secrets/istio/root-cert.pem \\
-  -e CA_ROOT_CA=/var/run/secrets/istio/root-cert.pem \\
-  -e ISTIO_META_CLUSTER_ID=rocks-cluster \\
-  -e CLUSTER_ID=rocks-cluster \\
-  -e ISTIO_META_ENABLE_HBONE=true \\
-  -e ISTIO_META_DNS_CAPTURE=true \\
-  -e ISTIO_META_DNS_AUTO_ALLOCATE=true \\
-  -e ISTIO_META_DNS_PROXY_ADDR=127.0.0.1:15053 \\
-  -e RUST_LOG=info \\
-  \${ZTUNNEL_IMAGE}
+ExecStart=/usr/local/bin/start-ztunnel.sh
 ExecStop=/usr/bin/podman stop -t 10 ztunnel
 Restart=always
 RestartSec=5
@@ -201,7 +195,38 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+cat >/etc/systemd/system/ztunnel-redirect.service <<'EOF'
+[Unit]
+Description=Redirect ms-c egress to ztunnel :15001
+After=ztunnel.service
+Wants=ztunnel.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/istio/service-cidr.env
+ExecStart=/usr/local/bin/setup-ztunnel-redirect.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
-systemctl enable ztunnel-dns-forward.service
-echo "Run: systemctl enable --now ztunnel && systemctl start ztunnel-dns-forward"
-echo "Verify: getent hosts ms-a.osm-poc-demo.svc.cluster.local"
+systemctl enable ztunnel-dns-forward.service ztunnel-redirect.service
+echo "Run in order:"
+echo "  sudo systemctl enable --now ztunnel"
+echo "  sudo systemctl start ztunnel-dns-forward"
+echo "  sudo ./run-ms-c.sh   # or podman start ms-c, then:"
+echo "  sudo systemctl start ztunnel-redirect"
+echo "  sudo verify-ztunnel.sh"
+echo "Mesh egress test (from cluster): oc -n osm-poc-demo exec deploy/ms-b -- curl -sf http://ms-c:8080/api/handle-from-b"
+
+if systemctl is-active --quiet ztunnel 2>/dev/null; then
+  echo "==> ztunnel already running — reload units (restart manually if you changed env: systemctl restart ztunnel)"
+  systemctl start ztunnel-dns-forward 2>/dev/null || true
+  if podman container exists ms-c 2>/dev/null; then
+    echo "==> ms-c detected — applying outbound redirect"
+    /usr/local/bin/setup-ztunnel-redirect.sh || true
+    systemctl start ztunnel-redirect 2>/dev/null || true
+  fi
+fi

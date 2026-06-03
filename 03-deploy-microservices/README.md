@@ -49,10 +49,12 @@ Deploys microservices **ms-a** and **ms-b** in project `osm-poc-demo` with OpenS
 3. Register mesh service for external ms-c and apply policies:
 
    ```bash
-   # Edit 05-workload-c.yaml: set VSI_PRIVATE_IP on WorkloadEntry + EndpointSlice (Service has no selector)
-   oc apply -f 05-workload-c.yaml
+   export VSI_PRIVATE_IP=<vsi-private-ip>
+   ./apply-workload-c.sh
    oc apply -f 06-authorization-policies.yaml
    ```
+
+   `apply-workload-c.sh` substitutes `VSI_PRIVATE_IP` into `05-workload-c.yaml` (WorkloadEntry + EndpointSlice with `serviceAccountName: ms-c`).
 
 4. Wait for pods:
 

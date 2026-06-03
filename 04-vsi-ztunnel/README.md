@@ -69,27 +69,33 @@ sudo useradd --system --gid 1000 --home-dir /var/lib/istio istio-proxy 2>/dev/nu
 cd 04-vsi-ztunnel
 export EW_GATEWAY_HOST="<east-west-gateway-hostname>"
 export VSI_PRIVATE_IP="<vsi-private-ip>"
+export CLUSTER_ID=rocks-cluster
+export TOKEN_DURATION=86400   # seconds (24h); not "24h"
 
-oc apply -f ../03-deploy-microservices/05-workload-c.yaml
-# Edit WorkloadEntry address in 05-workload-c.yaml if not set already
-
-istioctl x workload entry configure \
-  -f ../03-deploy-microservices/05-workload-c.yaml \
-  --clusterID rocks-cluster \
-  -o ./vsi-onboarding \
-  --tokenDuration=86400
+./generate-vsi-onboarding.sh
 ```
 
-`--tokenDuration` must be an **integer number of seconds** (not `24h`). `86400` is 24 hours. Default is `3600` (1 hour).
+This script applies `05-workload-c.yaml` with `VSI_PRIVATE_IP`, runs `istioctl x workload entry configure`, writes **`istio-token` for SA `ms-c`**, and records **`SERVICE_CIDR`** in `vsi-onboarding/service.env`.
+
+**Automated copy + instructions** (optional):
+
+```bash
+export VSI_PUBLIC_IP=<vsi-public-ip>
+export SSH_KEY=<path-to-your-key>.prv
+./install-vsi.sh
+```
 
 ### 5. Copy onboarding files and install script to the VSI (workstation)
 
-From your workstation (replace key path and VSI IP). IBM Cloud RHEL images use **`vpcuser`**; files land under `/home/vpcuser/`:
+If you did not use `install-vsi.sh`, copy scripts and onboarding manually. IBM Cloud RHEL images use **`vpcuser`**:
 
 ```bash
 cd 04-vsi-ztunnel
 scp -i <path-to-your-key>.prv -r \
   ./scripts/install-ztunnel.sh \
+  ./scripts/setup-ztunnel-redirect.sh \
+  ./scripts/verify-ztunnel.sh \
+  ./scripts/run-ms-c.sh \
   ./vsi-onboarding \
   vpcuser@<VSI_PUBLIC_IP>:/home/vpcuser/
 ```
@@ -125,40 +131,43 @@ sudo systemctl enable --now ztunnel
 sudo systemctl status ztunnel
 ```
 
-### 8. Deploy ms-c container on the VSI
+### 8. Deploy ms-c and outbound capture on the VSI
+
+`install-ztunnel.sh` installs ztunnel, mesh DNS, and **`setup-ztunnel-redirect.sh`** (iptables redirect of ms-c egress to **:15001** + `route_localnet`). **Dedicated ztunnel alone does not capture app traffic on a bare VSI.**
 
 ```bash
 export QUAY_ORG=your-quay-org
 export IMAGE_TAG=latest
-export MS_A_URL="http://ms-a.osm-poc-demo.svc.cluster.local:8080"
-
-sudo podman run -d --name ms-c --restart=always \
-  --network host \
-  -e MS_A_URL="${MS_A_URL}" \
-  -e BIND_HOST=0.0.0.0 \
-  quay.io/${QUAY_ORG}/osm-poc-ms-c:${IMAGE_TAG}
+sudo -E ./run-ms-c.sh
+sudo systemctl start ztunnel-redirect
+sudo verify-ztunnel.sh
 ```
 
-If the image is private, run `sudo podman login quay.io` on the VSI first (or use a pull secret workflow).
+`run-ms-c.sh` starts ms-c with **`--user 185:185`** (image UID) and applies iptables rules automatically when ztunnel is running.
 
-Expose on localhost for local demos (`curl localhost:8080/health`). Mesh traffic arrives via ztunnel redirection on port 8080.
+If the image is private, run `sudo podman login quay.io` on the VSI first.
 
 ### 9. Verify mesh connectivity
 
-From the cluster:
+**Health alone is not enough** — it only tests inbound to ms-c. The ring requires **outbound C→A** through ztunnel.
+
+From the cluster (primary tests):
+
+```bash
+oc -n osm-poc-demo exec deploy/ms-b -- curl -sf http://ms-c:8080/health
+oc -n osm-poc-demo exec deploy/ms-b -- curl -sf http://ms-c:8080/api/handle-from-b
+```
+
+Ambient test pod (full ring):
 
 ```bash
 oc -n osm-poc-demo run mesh-curl --rm -i --restart=Never \
   --image=curlimages/curl \
-  --overrides='{"metadata":{"labels":{"istio.io/dataplane-mode":"ambient"}}}' \
-  -- curl -s http://ms-c:8080/health
+  --overrides='{"metadata":{"labels":{"istio.io/dataplane-mode":"ambient","ambient.istio.io/redirection":"enabled"}}}' \
+  -- curl -sf -H "X-Trace-Id: $(uuidgen)" http://ms-a:8080/api/run-chain
 ```
 
-From the VSI:
-
-```bash
-curl -s http://127.0.0.1:8080/api/call-a -H "X-Trace-Id: manual-vsi-test"
-```
+Do **not** use `curl http://127.0.0.1:8080/api/call-a` on the VSI as the main mesh egress test.
 
 ### 10. Network policy reminder
 
@@ -181,14 +190,48 @@ istioctl ztunnel-config workloads -n ztunnel | grep ms-c
 
 ## Troubleshooting
 
+### `handle-from-b` / `call-a` fails but `/health` works (C→A outbound)
+
+Inbound B→C is fine; **outbound from ms-c to ms-a** must traverse ztunnel **:15001**. On a bare VSI, `install-ztunnel.sh` + `run-ms-c.sh` install **iptables** (`OSM_ZTUNNEL_OUT`) and `net.ipv4.conf.all.route_localnet=1`.
+
+```bash
+sudo iptables -t nat -S OSM_ZTUNNEL_OUT | grep 15001
+sudo sysctl net.ipv4.conf.all.route_localnet
+sudo /usr/local/bin/setup-ztunnel-redirect.sh
+```
+
+### ztunnel xDS: `tls handshake eof` to `istiod:15012`
+
+Regenerate onboarding and refresh secrets (token must be for **SA `ms-c`**):
+
+```bash
+# Workstation
+cd 04-vsi-ztunnel
+export VSI_PRIVATE_IP=<ip> EW_GATEWAY_HOST=<ew-host>
+./generate-vsi-onboarding.sh
+scp -i <key>.prv -r vsi-onboarding vpcuser@<VSI>:/home/vpcuser/
+```
+
+```bash
+# VSI
+sudo cp vsi-onboarding/istio-token /var/run/secrets/tokens/istio-token
+sudo cp vsi-onboarding/root-cert.pem /var/run/secrets/istio/root-cert.pem
+sudo chown istio-proxy:istio-proxy /var/run/secrets/tokens/istio-token /var/run/secrets/istio/root-cert.pem
+sudo systemctl restart ztunnel
+sudo journalctl -u ztunnel -f
+```
+
+Ensure VSI security group allows **outbound TCP 15012** to the east-west gateway.
+
 ### `istioctl ztunnel-config service` shows `ms-c` with `0/0` endpoints
 
 The Kubernetes `Service` for ms-c has **no pod selector**, so the ClusterIP has no backends until an **`EndpointSlice`** points at the VSI IP (see `03-deploy-microservices/05-workload-c.yaml`). A `ServiceEntry` with `workloadSelector` alone is **not** sufficient in ambient mode — you need the VIP wired to `10.243.64.9`.
 
-Apply (set `WorkloadEntry` + `EndpointSlice` address to your VSI private IP):
+Apply with your VSI private IP:
 
 ```bash
-oc apply -f 03-deploy-microservices/05-workload-c.yaml
+export VSI_PRIVATE_IP=<vsi-private-ip>
+../03-deploy-microservices/apply-workload-c.sh
 ```
 
 Confirm (must show **1/1**, not 0/0):

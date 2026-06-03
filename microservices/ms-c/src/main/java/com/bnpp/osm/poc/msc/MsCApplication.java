@@ -56,7 +56,7 @@ public final class MsCApplication {
                     "downstream", body));
         } catch (Exception e) {
             TraceLog.error(SERVICE, traceId, "CALL_A", "failed to reach ms-a", e);
-            json(exchange, 502, Map.of("service", SERVICE, "traceId", traceId, "error", e.getMessage()));
+            json(exchange, 502, Map.of("service", SERVICE, "traceId", traceId, "error", errorMessage(e)));
         }
     }
 
@@ -68,8 +68,16 @@ public final class MsCApplication {
             json(exchange, 200, Map.of("service", SERVICE, "traceId", traceId, "result", body));
         } catch (Exception e) {
             TraceLog.error(SERVICE, traceId, "CALL_A", "failed to reach ms-a", e);
-            json(exchange, 502, Map.of("service", SERVICE, "traceId", traceId, "error", e.getMessage()));
+            json(exchange, 502, Map.of("service", SERVICE, "traceId", traceId, "error", errorMessage(e)));
         }
+    }
+
+    private static String errorMessage(Exception e) {
+        String detail = e.getMessage();
+        if (detail == null || detail.isBlank()) {
+            detail = e.getClass().getSimpleName();
+        }
+        return detail;
     }
 
     private static String traceId(HttpExchange exchange) {
@@ -82,7 +90,8 @@ public final class MsCApplication {
                 .map(e -> "\"" + e.getKey() + "\":\"" + escape(e.getValue()) + "\"")
                 .collect(Collectors.joining(",", "{", "}"));
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.getResponseHeaders().set("Connection", "close");
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);

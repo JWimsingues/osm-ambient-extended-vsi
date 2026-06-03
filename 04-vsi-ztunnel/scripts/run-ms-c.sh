@@ -14,13 +14,25 @@ touch "${LOG_DIR}/ms-c.log"
 chmod 644 "${LOG_DIR}/ms-c.log"
 
 podman rm -f ms-c 2>/dev/null || true
-# Host network so ztunnel (also host network) can capture DNS and L4 for ms-c.
+# Host network + image UID 185 so iptables owner match can redirect egress to ztunnel :15001.
 podman run -d --name ms-c --restart=always \
   --network host \
+  --user 185:185 \
   -e BIND_HOST=0.0.0.0 \
   -e LOG_FORMAT=json \
   -e MS_A_URL="${MS_A_URL}" \
   "${IMAGE}"
+
+if systemctl is-active --quiet ztunnel 2>/dev/null; then
+  echo "==> Applying ztunnel outbound redirect for ms-c"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REDIRECT=/usr/local/bin/setup-ztunnel-redirect.sh
+  [[ -x "${REDIRECT}" ]] || REDIRECT="${SCRIPT_DIR}/setup-ztunnel-redirect.sh"
+  sudo "${REDIRECT}"
+  sudo systemctl enable --now ztunnel-redirect.service 2>/dev/null || true
+else
+  echo "WARN: ztunnel not running — start ztunnel before mesh egress works" >&2
+fi
 
 # Forward container stdout to a file tailed by Fluent Bit on the VSI
 if [[ -f /var/run/ms-c-log-forwarder.pid ]]; then

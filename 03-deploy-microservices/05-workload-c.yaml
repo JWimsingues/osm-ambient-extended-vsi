@@ -30,7 +30,7 @@ metadata:
     app: ms-c
     version: v1
 spec:
-  address: 10.243.64.9
+  address: ${VSI_PRIVATE_IP}
   labels:
     app: ms-c
     version: v1
@@ -57,9 +57,11 @@ ports:
     protocol: TCP
 endpoints:
   - addresses:
-      - "10.243.64.9" # same as WorkloadEntry spec.address (VSI_PRIVATE_IP)
+      - "${VSI_PRIVATE_IP}"
     conditions:
       ready: true
+    # Align with WorkloadEntry serviceAccount (avoids ztunnel registering sa/default).
+    serviceAccountName: ms-c
 ---
 apiVersion: v1
 kind: Service

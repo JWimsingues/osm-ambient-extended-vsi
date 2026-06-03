@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Verify ambient control plane and multi-network settings after step 2 apply.
+set -euo pipefail
+
+fail=0
+ok() { echo "OK: $*"; }
+err() { echo "ERROR: $*" >&2; fail=1; }
+
+oc wait --for=condition=Ready istio/default -n istio-system --timeout=10m &>/dev/null \
+  && ok "istio/default Ready" \
+  || err "istio/default not Ready"
+
+meshnets="$(oc get istio default -n istio-system -o jsonpath='{.spec.values.global.meshNetworks}' 2>/dev/null || true)"
+if [[ -n "${meshnets}" && "${meshnets}" != "{}" && "${meshnets}" != "null" ]]; then
+  ok "meshNetworks present on Istio CR"
+else
+  err "meshNetworks missing — run: oc apply -f 01-istio-ambient.yaml"
+fi
+
+multi="$(oc -n istio-system get deploy istiod -o json \
+  | python3 -c "import sys,json; env={e['name']:e.get('value','') for e in json.load(sys.stdin)['spec']['template']['spec']['containers'][0]['env']}; print(env.get('AMBIENT_ENABLE_MULTI_NETWORK',''))" 2>/dev/null || true)"
+if [[ "${multi}" == "true" ]]; then
+  ok "istiod AMBIENT_ENABLE_MULTI_NETWORK=true"
+else
+  err "istiod AMBIENT_ENABLE_MULTI_NETWORK is not true (got '${multi}')"
+fi
+
+oc -n istio-system rollout status deploy/istiod --timeout=5m &>/dev/null \
+  && ok "istiod rolled out" \
+  || err "istiod rollout incomplete"
+
+oc -n ztunnel get pods -l app.kubernetes.io/name=ztunnel 2>/dev/null | grep -q Running \
+  && ok "ztunnel pods Running" \
+  || err "no Running ztunnel pods in namespace ztunnel"
+
+exit "${fail}"

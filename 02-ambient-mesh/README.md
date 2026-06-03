@@ -58,11 +58,14 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
 
    Both labels are already set in `03-deploy-microservices/01-namespace.yaml`; `istio-discovery=enabled` is required for `discoverySelectors` on the `Istio` CR.
 
-6. Verify ztunnel sees cluster nodes:
+6. Verify ambient control plane and multi-network (required for VSI):
 
    ```bash
+   ./verify-ambient.sh
    istioctl ztunnel-config workloads -n ztunnel | head
    ```
+
+   `verify-ambient.sh` fails if `meshNetworks` or `AMBIENT_ENABLE_MULTI_NETWORK` is missing on the live `Istio` CR.
 
 ## Expected (Working) Output
 

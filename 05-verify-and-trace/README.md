@@ -1,8 +1,32 @@
 # Step 5 — Verify Traffic and Follow Trace Logs
 
+> Troubleshooting snapshot (2026-06-03): [`docs/troubleshooting-session-2026-06-03.md`](../docs/troubleshooting-session-2026-06-03.md).  
+> Future install fixes (agent prompt): [`docs/FUTURE-FIX-PROMPT.md`](../docs/FUTURE-FIX-PROMPT.md).
+
 ## Description
 
 Validates the **A → B → C → A** chain and shows how to correlate logs using `X-Trace-Id` across cluster pods and the VSI.
+
+## Pre-flight (automated checks)
+
+```bash
+# After step 2
+cd ../02-ambient-mesh && ./verify-ambient.sh
+
+# On the VSI (after step 4)
+sudo verify-ztunnel.sh
+```
+
+## Acceptance checklist
+
+| # | Check | Command |
+|---|--------|---------|
+| 1 | meshNetworks on Istio CR | `02-ambient-mesh/verify-ambient.sh` |
+| 2 | ms-c ztunnel endpoints | `istioctl ztunnel-config service -n ztunnel \| grep ms-c` → **1/1** |
+| 3 | B→C health | `oc exec deploy/ms-b -- curl -sf http://ms-c:8080/health` |
+| 4 | B→C handler (C→A egress) | `oc exec deploy/ms-b -- curl -sf http://ms-c:8080/api/handle-from-b` |
+| 5 | VSI iptables redirect | `sudo iptables -t nat -S OSM_ZTUNNEL_OUT \| grep 15001` |
+| 6 | Full ring | mesh-curl `run-chain` below |
 
 ## Prerequisites
 
