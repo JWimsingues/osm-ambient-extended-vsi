@@ -15,6 +15,20 @@ Deploys microservices **ms-a** and **ms-b** in project `osm-poc-demo` with OpenS
   export IMAGE_TAG=latest
   ```
 
+- **Quay pull access on the cluster.** Local `podman pull` uses your `~/.docker/config.json` credentials; OpenShift nodes do not. If repositories are private, create a pull secret in `osm-poc-demo` and link it to the workload service accounts (Deployments use `serviceAccountName: ms-a` / `ms-b`, not `default`):
+
+  ```bash
+  # After podman login quay.io on your workstation:
+  oc create secret generic quay-io-pull -n osm-poc-demo \
+    --from-file=.dockerconfigjson="${HOME}/.docker/config.json" \
+    --type=kubernetes.io/dockerconfigjson
+
+  oc secrets link ms-a quay-io-pull --for=pull -n osm-poc-demo
+  oc secrets link ms-b quay-io-pull --for=pull -n osm-poc-demo
+  ```
+
+  Alternatively, set each repository to **Public** in the Quay UI (acceptable for demos only). `ErrImagePull` / `unauthorized` from the kubelet always means the node cannot authenticate to the registry, not that the image is missing.
+
 ## Steps
 
 1. Create project and mesh enrollment:
