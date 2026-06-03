@@ -12,10 +12,18 @@ spec:
       network: main-network
       multiCluster:
         clusterName: rocks-cluster
+      meshNetworks:
+        vsi-network:
+          endpoints:
+            - fromRegistry: rocks-cluster
+          gateways:
+            - registryServiceName: istio-eastwestgateway.istio-system.svc.cluster.local
+              port: 15008
     pilot:
       trustedZtunnelNamespace: ztunnel
       env:
         PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION: "true"
+        AMBIENT_ENABLE_MULTI_NETWORK: "true"
     meshConfig:
       discoverySelectors:
         - matchLabels:

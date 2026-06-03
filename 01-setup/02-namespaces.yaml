@@ -5,6 +5,7 @@ metadata:
   name: istio-system
   labels:
     istio-discovery: enabled
+    topology.istio.io/network: main-network
 ---
 apiVersion: v1
 kind: Namespace
