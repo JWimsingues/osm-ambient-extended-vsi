@@ -3,6 +3,11 @@
 set -euo pipefail
 
 EW_GATEWAY_CONFIG=/etc/istio/ew-gateway.env
+: "${ONBOARD_DIR:=/home/vpcuser/vsi-onboarding}"
+if [[ -f "${ONBOARD_DIR}/ew-gateway.env" ]]; then
+  # shellcheck source=/dev/null
+  source "${ONBOARD_DIR}/ew-gateway.env"
+fi
 
 if [[ -z "${EW_GATEWAY_HOST:-}" ]]; then
   if [[ -n "${1:-}" ]]; then
@@ -32,18 +37,22 @@ EOF
 fi
 
 : "${ISTIOD_GATEWAY_HOST:=${EW_GATEWAY_HOST}}"
-export EW_GATEWAY_HOST ISTIOD_GATEWAY_HOST
+export EW_GATEWAY_HOST ISTIOD_GATEWAY_HOST ISTIOD_GATEWAY_IP
 install -d -m 0755 /etc/istio
-cat >"${EW_GATEWAY_CONFIG}" <<EOF
+write_ew_gateway_env() {
+  cat >"${EW_GATEWAY_CONFIG}" <<EOF
 EW_GATEWAY_HOST=${EW_GATEWAY_HOST}
 ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}
+ISTIOD_GATEWAY_IP=${ISTIOD_GATEWAY_IP:-}
 EOF
-chmod 0644 "${EW_GATEWAY_CONFIG}"
+  chmod 0644 "${EW_GATEWAY_CONFIG}"
+}
+write_ew_gateway_env
 echo "==> EW_GATEWAY_HOST=${EW_GATEWAY_HOST} (HBONE / meshNetworks)"
 echo "==> ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} (xDS/CA, saved in ${EW_GATEWAY_CONFIG})"
+[[ -n "${ISTIOD_GATEWAY_IP:-}" ]] && echo "==> ISTIOD_GATEWAY_IP=${ISTIOD_GATEWAY_IP}"
 # Align with OSM 3.3 / Istio 1.28.6 (accept "1.28.6" or "v1.28.6").
 : "${ZTUNNEL_VERSION:=1.28.6}"
-: "${ONBOARD_DIR:=/home/vpcuser/vsi-onboarding}"
 # Must match WorkloadEntry metadata.name (see 03-deploy-microservices/05-workload-c.yaml).
 : "${PROXY_WORKLOAD_NAME:=ms-c-vsi}"
 PROXY_WORKLOAD_INFO="osm-poc-demo/${PROXY_WORKLOAD_NAME}/ms-c"
@@ -104,6 +113,11 @@ if [[ -d "${ONBOARD_DIR}" ]]; then
   if [[ -f "${ONBOARD_DIR}/service.env" ]]; then
     cp "${ONBOARD_DIR}/service.env" /etc/istio/service-cidr.env
   fi
+  if [[ -f "${ONBOARD_DIR}/ew-gateway.env" ]]; then
+    # shellcheck source=/dev/null
+    source "${ONBOARD_DIR}/ew-gateway.env"
+    write_ew_gateway_env
+  fi
 fi
 
 SCRIPT_SRC="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -150,12 +164,14 @@ if [[ ! -f /var/run/secrets/tokens/istio-token ]]; then
 fi
 
 echo "==> Mapping istiod to xDS LoadBalancer (resolve hostname to IP for /etc/hosts)"
-if [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ -n "${ISTIOD_GATEWAY_IP:-}" ]]; then
+  EW_GATEWAY_IP="${ISTIOD_GATEWAY_IP}"
+elif [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   EW_GATEWAY_IP="${ISTIOD_GATEWAY_HOST}"
 else
-  EW_GATEWAY_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" | awk '{print $1; exit}')"
+  EW_GATEWAY_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
   if [[ -z "${EW_GATEWAY_IP}" ]]; then
-    echo "ERROR: cannot resolve ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} to an IPv4 address" >&2
+    echo "ERROR: cannot resolve ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} (set ISTIOD_GATEWAY_IP in onboarding ew-gateway.env)" >&2
     exit 1
   fi
 fi

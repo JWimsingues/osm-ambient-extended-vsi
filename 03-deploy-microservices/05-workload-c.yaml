@@ -40,9 +40,7 @@ spec:
   ports:
     http: 8080
 ---
-# Binds the ClusterIP Service VIP to the VSI IP. Required for ambient ztunnel: a Service
-# without selector has no kube-proxy endpoints; istioctl shows 0/0 until this exists.
-# (ServiceEntry + workloadSelector alone is not enough — VIP must map to the backend.)
+# Binds ClusterIP ms-c to the VSI IP (required for kube Service without selector).
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:
@@ -60,7 +58,6 @@ endpoints:
       - "${VSI_PRIVATE_IP}"
     conditions:
       ready: true
-    # Align with WorkloadEntry serviceAccount (avoids ztunnel registering sa/default).
     serviceAccountName: ms-c
 ---
 apiVersion: v1

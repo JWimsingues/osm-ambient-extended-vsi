@@ -24,6 +24,7 @@ spec:
         app: ms-a
         version: v1
         ambient.istio.io/redirection: enabled
+        topology.istio.io/network: main-network
     spec:
       serviceAccountName: ms-a
       containers:

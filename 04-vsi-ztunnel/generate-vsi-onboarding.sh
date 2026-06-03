@@ -89,9 +89,16 @@ ISTIOD_GATEWAY_IP="$(oc -n osm-poc-demo run istiod-dns --rm -i --restart=Never \
 if [[ -z "${ISTIOD_GATEWAY_IP}" ]]; then
   ISTIOD_GATEWAY_IP="$(resolve_host_ip "${ISTIOD_GATEWAY_HOST}")"
 fi
+EW_GATEWAY_IP="$(oc -n osm-poc-demo run ew-dns --rm -i --restart=Never \
+  --image=busybox:1.36 --command -- nslookup "${EW_GATEWAY_HOST}" 2>/dev/null \
+  | awk '/^Address: / { print $2; exit }' || true)"
+if [[ -z "${EW_GATEWAY_IP}" ]]; then
+  EW_GATEWAY_IP="$(resolve_host_ip "${EW_GATEWAY_HOST}")"
+fi
 
 cat >"${OUT_DIR}/ew-gateway.env" <<EOF
 EW_GATEWAY_HOST=${EW_GATEWAY_HOST}
+EW_GATEWAY_IP=${EW_GATEWAY_IP:-}
 ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}
 ISTIOD_GATEWAY_IP=${ISTIOD_GATEWAY_IP:-}
 EOF
