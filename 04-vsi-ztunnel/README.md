@@ -10,7 +10,7 @@ Onboards **ms-c** running on an IBM Cloud VSI into the ROCKS ambient mesh by ins
 - RHEL 9.x VSI with outbound connectivity to the east-west gateway (TCP `15012`, `15017`, `15008`)
 - Inbound from cluster to VSI on TCP `8080` (and `15008` if required by your network design)
 - `istioctl` on your workstation; `sudo` on the VSI (default login is not root)
-- ztunnel binary matching your OSM/Istio version (from the cluster or [Istio ztunnel release](https://github.com/istio/ztunnel))
+- ztunnel **1.28.6** matching OSM **3.3** / Istio **1.28.6** (the install script pulls `docker.io/istio/ztunnel:1.28.6` and extracts the binary)
 - IBM Cloud VPC security group rules updated so you can SSH to the VSI (see step 1)
 
 ## Steps
@@ -82,26 +82,42 @@ istioctl x workload entry configure \
 
 `--tokenDuration` must be an **integer number of seconds** (not `24h`). `86400` is 24 hours. Default is `3600` (1 hour).
 
-### 5. Install ztunnel on the VSI
+### 5. Copy onboarding files and install script to the VSI (workstation)
 
-Copy `scripts/install-ztunnel.sh` and onboarding artifacts to the VSI, set `EW_GATEWAY_HOST`, then run:
+From your workstation (replace key path and VSI IP). IBM Cloud RHEL images use **`vpcuser`**; files land under `/home/vpcuser/`:
 
 ```bash
-export EW_GATEWAY_HOST="<east-west-gateway-hostname>"
-export ZTUNNEL_VERSION="1.24.2"   # align with your Istio/OSM version
-sudo -E ./install-ztunnel.sh
+cd 04-vsi-ztunnel
+scp -i <path-to-your-key>.prv -r \
+  ./scripts/install-ztunnel.sh \
+  ./vsi-onboarding \
+  vpcuser@<VSI_PUBLIC_IP>:/home/vpcuser/
 ```
 
-### 6. Configure `/etc/hosts` for istiod via east-west gateway
+Example:
 
 ```bash
-echo "${EW_GATEWAY_HOST} istiod.istio-system.svc" | sudo tee -a /etc/hosts
+scp -i jwimsing_rsa.prv -r \
+  ./scripts/install-ztunnel.sh \
+  ./vsi-onboarding \
+  vpcuser@161.156.86.195:/home/vpcuser/
+```
+
+### 6. Install ztunnel on the VSI
+
+SSH to the VSI as `vpcuser`, then run the install script. It pulls `istio/ztunnel:1.28.6`, copies onboarding files from `/home/vpcuser/vsi-onboarding`, and maps `istiod` to the east-west gateway in `/etc/hosts`.
+
+```bash
+ssh -i <path-to-your-key>.prv vpcuser@<VSI_PUBLIC_IP>
+cd /home/vpcuser
+export EW_GATEWAY_HOST="<east-west-gateway-hostname>"
+export ZTUNNEL_VERSION="1.28.6"   # OSM 3.3 / Istio 1.28.6
+sudo -E ./install-ztunnel.sh
 ```
 
 ### 7. Start ztunnel (systemd)
 
 ```bash
-sudo cp vsi-onboarding/* /var/lib/istio/ztunnel/
 sudo systemctl enable --now ztunnel
 sudo systemctl status ztunnel
 ```

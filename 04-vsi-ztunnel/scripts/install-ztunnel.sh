@@ -3,9 +3,11 @@
 set -euo pipefail
 
 : "${EW_GATEWAY_HOST:?Set EW_GATEWAY_HOST to the east-west LoadBalancer hostname}"
-: "${ZTUNNEL_VERSION:=1.24.2}"
-: "${ONBOARD_DIR:=/root/vsi-onboarding}"
-: "${ZTUNNEL_BIN_URL:=https://github.com/istio/ztunnel/releases/download/${ZTUNNEL_VERSION}/ztunnel-linux-amd64}"
+# Align with OSM 3.3 / Istio 1.28.6 (accept "1.28.6" or "v1.28.6").
+: "${ZTUNNEL_VERSION:=1.28.6}"
+: "${ONBOARD_DIR:=/home/vpcuser/vsi-onboarding}"
+ZTUNNEL_IMAGE_TAG="${ZTUNNEL_VERSION#v}"
+: "${ZTUNNEL_IMAGE:=docker.io/istio/ztunnel:${ZTUNNEL_IMAGE_TAG}}"
 
 echo "==> Creating istio-proxy user and directories"
 groupadd --system istio-proxy 2>/dev/null || true
@@ -19,8 +21,12 @@ install -d -m 0750 -o istio-proxy -g istio-proxy \
   /etc/istio/config \
   /etc/istio/proxy
 
-echo "==> Downloading ztunnel ${ZTUNNEL_VERSION}"
-curl -fsSL "${ZTUNNEL_BIN_URL}" -o /usr/local/bin/ztunnel
+echo "==> Pulling ztunnel ${ZTUNNEL_IMAGE_TAG} from ${ZTUNNEL_IMAGE}"
+# ztunnel is not published as a standalone GitHub release; extract the binary from the official image.
+podman pull "${ZTUNNEL_IMAGE}"
+TMP_CONTAINER="$(podman create "${ZTUNNEL_IMAGE}")"
+podman cp "${TMP_CONTAINER}:/usr/local/bin/ztunnel" /usr/local/bin/ztunnel
+podman rm "${TMP_CONTAINER}" >/dev/null
 chmod 0755 /usr/local/bin/ztunnel
 
 if [[ -d "${ONBOARD_DIR}" ]]; then
