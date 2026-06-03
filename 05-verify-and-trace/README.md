@@ -17,7 +17,7 @@ Validates the **A → B → C → A** chain and shows how to correlate logs usin
    TRACE=$(uuidgen | tr '[:upper:]' '[:lower:]')
    oc -n osm-poc-demo run mesh-curl --rm -i --restart=Never \
      --image=curlimages/curl \
-     --labels="istio.io/dataplane-mode=ambient" \
+     --overrides='{"metadata":{"labels":{"istio.io/dataplane-mode":"ambient","ambient.istio.io/redirection":"enabled"}}}' \
      --command -- curl -sv \
        -H "X-Trace-Id: ${TRACE}" \
        http://ms-a:8080/api/run-chain
