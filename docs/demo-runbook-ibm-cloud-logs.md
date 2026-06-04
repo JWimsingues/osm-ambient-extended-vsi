@@ -13,18 +13,13 @@ This runbook explains **where to call each microservice**, **what you should see
 
 ## 1. Where to call each microservice
 
-### Recommended — full chain (in-mesh)
-
-Use an **ambient** client inside `osm-poc-demo` so L4 `AuthorizationPolicy` identities apply.
+### Recommended — full chain (via OpenShift Route)
 
 ```bash
+export MS_A_URL="https://$(oc -n osm-poc-demo get route ms-a -o jsonpath='{.spec.host}')"
 export TRACE="demo-$(date +%Y%m%d-%H%M%S)"
-oc -n osm-poc-demo run curl-demo --rm -i --restart=Never \
-  --image=curlimages/curl \
-  --labels="istio.io/dataplane-mode=ambient" \
-  --command -- \
-  curl -sv -H "X-Trace-Id: ${TRACE}" \
-  http://ms-a.osm-poc-demo.svc.cluster.local:8080/api/run-chain
+
+curl -sk -H "X-Trace-Id: ${TRACE}" "${MS_A_URL}/api/run-chain"
 ```
 
 Or use the helper script:
@@ -36,22 +31,21 @@ TRACE_ID=my-client-demo ./run-demo-trace.sh
 
 | Item | Value |
 |---|---|
-| **Caller** | Ephemeral pod in `osm-poc-demo` (ambient) |
-| **Target** | `ms-a:8080` / `api/run-chain` |
-| **Why** | Exercises A→B→C→A with mesh mTLS and policies |
+| **Caller** | Your laptop / bastion via OpenShift Route |
+| **Target** | `ms-a` → `api/run-chain` |
+| **Why** | Exercises the full A→B→C→A chain; mTLS enforced between pods and VSI |
 
-### Optional — OpenShift Route (external / browser)
+### Optional — A→B only (partial chain)
 
 ```bash
-HOST=$(oc -n osm-poc-demo get route ms-a -o jsonpath='{.spec.host}')
-curl -sk -H "X-Trace-Id: ${TRACE}" "https://${HOST}/api/call-b"
+curl -sk -H "X-Trace-Id: ${TRACE}" "${MS_A_URL}/api/call-b"
 ```
 
 | Item | Value |
 |---|---|
 | **Caller** | Your laptop / bastion |
-| **Target** | Route `ms-a` → partial path **A→B only** |
-| **Note** | Ingress identity is **not** `sa/ms-a`; policy tests should use in-mesh calls |
+| **Target** | Route `ms-a` → `api/call-b` (A→B only) |
+| **Note** | Useful to isolate the cluster leg without the VSI |
 
 ### Optional — individual Routes
 
@@ -60,7 +54,7 @@ HOST_B=$(oc -n osm-poc-demo get route ms-b -o jsonpath='{.spec.host}')
 curl -sk "https://${HOST_B}/api/info"
 ```
 
-Direct calls to `ms-b` from the internet are typically **denied** by policy unless the caller has mesh identity `sa/ms-a`.
+Direct calls to `ms-b` via its Route work for health checks. For a policy-accurate demo where only `sa/ms-a` is allowed to call `ms-b`, the call must originate from within the mesh (i.e., from `ms-a`).
 
 ### VSI — ms-c only
 
@@ -189,9 +183,9 @@ Nested JSON in `result` is normal (each hop wraps the previous response).
 | Symptom | Check |
 |---|---|
 | No logs in IBM Cloud Logs | Agent DaemonSet `Running` on ROCKS; `systemctl status fluent-bit` on VSI; Sender IAM role |
-| Only ms-a/ms-b, no ms-c | VSI Fluent Bit tailing `/var/log/osm-poc/ms-c.log`; Podman log path in `run-ms-c.sh` |
+| Only ms-a/ms-b, no ms-c | VSI Fluent Bit running? (`systemctl status fluent-bit`); path correct in `fluent-bit-ms-c.conf` (`/var/log/osm-poc/ms-c.log`) |
 | Missing `traceId` field | `LOG_FORMAT=json` on deployments; rebuild images after code update |
-| Chain fails with 502 | VSI ztunnel / `WorkloadEntry` IP; `ms-c` pod on VSI healthy |
+| Chain fails with 502 | `WorkloadEntry` registered? (`oc get workloadentry -n osm-poc-demo`); `ms-c` service running on VSI (`systemctl status ms-c`); istio sidecar active (`systemctl status istio`) |
 | Route works but no policy demo | Use in-mesh curl, not Route, for full chain + policies |
 
 ---

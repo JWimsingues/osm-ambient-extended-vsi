@@ -2,11 +2,11 @@
 
 ## Description
 
-This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Service Mesh (OSM) 3.2 in Istio ambient mode. It installs the Sail Operator from OperatorHub and creates the namespaces required for `Istio`, `IstioCNI`, and `ZTunnel`.
+This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Service Mesh (OSM) 3.3 in Istio ambient mode. It installs the Sail Operator from OperatorHub and creates the namespaces required for `Istio`, `IstioCNI`, and `ZTunnel`.
 
 ## Prerequisites
 
-- OpenShift 4.19+ (ROCKS) with OVN-Kubernetes CNI
+- OpenShift 4.20+ (ROCKS) with OVN-Kubernetes CNI
 - `routingViaHost: true` in the OVN-Kubernetes configuration (required for ambient mode)
 - Cluster-admin access (`oc login`)
 - `oc` CLI and `istioctl` (matching your OSM version)
@@ -26,9 +26,7 @@ This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Servic
    oc get network.operator cluster -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost}'; echo
    ```
 
-   Expected: `true`. If not, follow [Configuring OVN-Kubernetes for ambient mode](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode).
-
-   If the command prints **false**, apply this remediation:
+   Expected: `true`. If not, apply this remediation:
 
    ```bash
    oc patch networks.operator.openshift.io cluster --type=merge -p \
@@ -38,6 +36,8 @@ This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Servic
    oc get network.operator cluster -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost}'; echo
    ```
 
+   See [Configuring OVN-Kubernetes for ambient mode](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/ossm-istio-ambient-mode) for details.
+
 3. Install the Red Hat OpenShift Service Mesh / Sail Operator:
 
    ```bash
@@ -45,11 +45,13 @@ This step prepares a ROCKS (OpenShift on IBM Cloud) cluster for OpenShift Servic
    oc wait --for=condition=Available subscription/redhat-openshift-service-mesh -n openshift-operators --timeout=600s
    ```
 
-4. Create mesh infrastructure namespaces (labeled `istio-discovery=enabled` for istiod discovery in step 2):
+4. Create mesh infrastructure namespaces:
 
    ```bash
    oc apply -f 02-namespaces.yaml
    ```
+
+   These namespaces carry `istio-discovery=enabled` so the istiod `discoverySelectors` in step 2 include them.
 
 ## Expected Output
 
@@ -62,5 +64,5 @@ namespace/ztunnel created
 
 ## Official Documentation
 
-- [Installing OpenShift Service Mesh 3.2](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/index)
-- [Istio ambient mode (OSM 3.2)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode)
+- [Installing OpenShift Service Mesh 3.3](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/index)
+- [Istio ambient mode (OSM 3.3)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/ossm-istio-ambient-mode)

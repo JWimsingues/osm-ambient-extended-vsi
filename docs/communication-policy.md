@@ -2,7 +2,7 @@
 
 ## Allowed call graph
 
-The demo enforces a **directed ring**: **A → B → C → A**. No other calls are permitted at the mesh L4 layer.
+The demo enforces a **directed ring**: **A → B → C → A**. No other calls are permitted at the mesh layer.
 
 ```mermaid
 flowchart LR
@@ -17,7 +17,6 @@ flowchart LR
   A -.->|DENIED| C
   B -.->|DENIED| A
   C -.->|DENIED| B
-  A -.->|DENIED| A
 ```
 
 ## Matrix
@@ -27,9 +26,9 @@ flowchart LR
 | **ms-a** | — | ✅ allowed | ❌ denied |
 | **ms-b** | ❌ denied | — | ✅ allowed |
 | **ms-c** | ✅ allowed | ❌ denied | — |
-| External (Route) | ⚠️ see note | ⚠️ see note | ❌ (not on Route) |
+| External (Route) | ✅ allowed | ✅ allowed (Route exposed) | ❌ (not on Route) |
 
-**Note:** L4 `AuthorizationPolicy` uses workload identities (SPIFFE). Calls from an OpenShift Route use the ingress gateway identity, not `sa/ms-a`. For policy-correct tests, use an in-mesh client ([`05-verify-and-trace`](../05-verify-and-trace/)). Routes remain useful for health checks and application demos.
+**Note on external traffic:** the OpenShift Route ingress has no Istio identity, so the `ms-a-allow-ingress` policy explicitly permits calls with `notPrincipals: ["*"]` in addition to the `sa/ms-c` rule. This allows health checks and demos via `curl`/browser while preserving mTLS enforcement for in-mesh calls.
 
 ## Implementation
 
@@ -39,9 +38,9 @@ Policies live in [`03-deploy-microservices/06-authorization-policies.yaml`](../0
 |---|---|---|
 | `ms-b-allow-from-a` | `app=ms-b` | ALLOW if source principal is `sa/ms-a` |
 | `ms-c-allow-from-b` | `app=ms-c` | ALLOW if source principal is `sa/ms-b` |
-| `ms-a-allow-from-c` | `app=ms-a` | ALLOW if source principal is `sa/ms-c` |
+| `ms-a-allow-ingress` | `app=ms-a` | ALLOW if source principal is `sa/ms-c` OR source has no principal (Route) |
 
-Enforcement point: **ztunnel** (ambient L4) on source and destination nodes/VSI.
+Enforcement point: **Envoy sidecar** on each pod and on the VSI (`istio-sidecar.rpm`).
 
 ## Application-level chain
 
@@ -57,4 +56,8 @@ Each hop propagates header `X-Trace-Id` for correlated logs.
 
 ## mTLS
 
-Ambient mode encrypts traffic between enrolled workloads using **HBONE** over **mTLS** (port **15008**). No application code changes are required.
+All three services run with Envoy sidecar injection (`sidecar.istio.io/inject: "true"`, `ambient.istio.io/redirection: disabled`).
+
+- **A ↔ B** (intra-cluster): standard Envoy mTLS end-to-end (port 8080, sidecar-to-sidecar).
+- **B → C** (cluster → VSI): direct mTLS to the WorkloadEntry IP (`161.156.86.195:8080`). The VSI iptables rules redirect inbound port 8080 to Envoy port 15006.
+- **C → A** (VSI → cluster): VSI Envoy routes via the east-west gateway port **15443** (`AUTO_PASSTHROUGH`). Istiod pushes the EW gateway's external IPs as endpoints for `ms-a` to the VM proxy because `ms-a` is on `main-network`.

@@ -5,7 +5,7 @@
 Configures **IBM Cloud Logs** ingestion from:
 
 - **ROCKS (OpenShift)**: IBM Cloud Logs agent (Helm) or ROKS cluster logging integration — collects container **stdout** from `ms-a` and `ms-b` in `osm-poc-demo`.
-- **VSI**: IBM Cloud Logs agent (Fluent Bit / systemd) tailing Podman log files for `ms-c` and optional `ztunnel` logs.
+- **VSI**: Fluent Bit agent tailing `/var/log/osm-poc/ms-c.log` (written by the `ms-c` systemd service).
 
 Application logs use **JSON** (`LOG_FORMAT=json`) with fields `traceId`, `service`, `action`, and `logtype=osm-poc-app` for correlation in IBM Cloud Logs.
 
@@ -56,27 +56,28 @@ Official reference: [Deploy Logging agent on OpenShift (Helm)](https://cloud.ibm
 
 ## Steps — VSI
 
-1. Copy VSI config template and set ingestion + API key:
+`ms-c` runs as a systemd service and writes structured JSON logs to `/var/log/osm-poc/ms-c.log`.
+The Fluent Bit agent tails this file and ships logs to IBM Cloud Logs.
+
+1. Copy VSI config template and set ingestion credentials:
 
    ```bash
    cp vsi/fluent-bit-ms-c.conf.template vsi/fluent-bit-ms-c.conf
-   # Edit IAM_API_KEY, INGESTION_HOST, INGESTION_PORT
+   # Edit: INGESTION_HOST, INGESTION_PORT, IAM_API_KEY, CLUSTER_NAME
    ```
 
-2. Install agent and wire Podman logs:
+2. Copy agent scripts to VSI and run installer:
 
    ```bash
-   scp -r vsi root@VSI_PUBLIC_IP:/root/osm-poc-logs/
-   ssh root@VSI_PUBLIC_IP 'cd /root/osm-poc-logs && ./install-logs-agent-vsi.sh'
-   ssh root@VSI_PUBLIC_IP '/root/osm-poc-logs/configure-podman-logging.sh'
+   VSI_PUBLIC_IP=<VSI_PUBLIC_IP>
+   scp -r vsi vpcuser@${VSI_PUBLIC_IP}:/tmp/osm-poc-logs/
+   ssh vpcuser@${VSI_PUBLIC_IP} \
+     "INGESTION_HOST=<host> INGESTION_PORT=443 IAM_API_KEY=<key> \
+      sudo -E bash /tmp/osm-poc-logs/install-logs-agent-vsi.sh"
    ```
 
-3. Restart `ms-c` with file logging (see updated [`04-vsi-ztunnel/scripts/run-ms-c.sh`](../04-vsi-ztunnel/scripts/run-ms-c.sh)):
-
-   ```bash
-   export LOG_FORMAT=json
-   ./run-ms-c.sh
-   ```
+   The installer deploys Fluent Bit, writes `/etc/fluent-bit/osm-poc-ms-c.conf` (from your edited template),
+   and enables the `fluent-bit` systemd service.
 
 See [About the Logging agent](https://cloud.ibm.com/docs/cloud-logs?topic=cloud-logs-agent-about) and [Fluent Bit agent configuration](https://cloud.ibm.com/docs/cloud-logs?topic=cloud-logs-agent-fluentbit).
 

@@ -1,22 +1,11 @@
 #!/usr/bin/env bash
-# Apply ms-c WorkloadEntry + EndpointSlice with the VSI private IP (no hardcoded IP in git).
+# Apply ms-c mesh resources (ServiceAccount, WorkloadGroup, Service, ServiceEntry).
+# The VM's IP is auto-registered by istiod when the VM sidecar connects in step 4.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-if [[ -z "${VSI_PRIVATE_IP:-}" ]]; then
-  cat >&2 <<'EOF'
-ERROR: VSI_PRIVATE_IP is not set.
-
-Example:
-  export VSI_PRIVATE_IP=10.243.64.9
-  ./apply-workload-c.sh
-EOF
-  exit 1
-fi
-
-export VSI_PRIVATE_IP
-oc -n osm-poc-demo delete serviceentry ms-c --ignore-not-found
-envsubst '${VSI_PRIVATE_IP}' < 05-workload-c.yaml | oc apply -f -
-echo "Applied 05-workload-c.yaml with VSI_PRIVATE_IP=${VSI_PRIVATE_IP}"
+oc apply -f 05-workload-c.yaml
+echo "Applied 05-workload-c.yaml"
+echo "WorkloadEntry will appear automatically once the VM sidecar connects (step 4)."

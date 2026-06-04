@@ -2,16 +2,12 @@
 
 ## Summary
 
-Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`, cluster `ZTunnel` DaemonSet, and multi-network settings for extending the mesh to an IBM Cloud VSI (`main-network` / `vsi-network`). Also deploys an east-west gateway so the VSI can reach `istiod` and mesh workloads.
+Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`, cluster `ZTunnel` DaemonSet, and multi-network settings for extending the mesh to an IBM Cloud VSI (`main-network` / `vm-network`). Also deploys an east-west gateway so the VSI can reach `istiod` and so the VM proxy can reach cluster workloads.
 
 ## Prerequisites
 
 - Step [`01-setup`](../01-setup/) completed; Sail Operator is `Available`
-- Gateway API CRDs present on the cluster (shipped with OpenShift 4.19+)
-- Replace placeholders in manifests:
-  - `MESH_ID` (default `mesh1`)
-  - East-west gateway public IP / DNS after LoadBalancer is provisioned
-- Namespaces included in mesh discovery must carry `istio-discovery=enabled` (see `01-setup/02-namespaces.yaml`, `03-deploy-microservices/01-namespace.yaml`). `01-istio-ambient.yaml` scopes istiod with matching `discoverySelectors`.
+- Namespaces carrying `istio-discovery=enabled` are present (see `01-setup/02-namespaces.yaml` and `03-deploy-microservices/01-namespace.yaml`); the `Istio` CR scopes istiod with matching `discoverySelectors`
 
 ## Steps
 
@@ -33,71 +29,72 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
    oc -n ztunnel get pods
    ```
 
-3. Deploy ambient east-west gateway (path 2 — HBONE `:15008`) and expose `istiod` for the VSI:
+3. Deploy the east-west gateway and label the `istio-system` namespace:
 
    ```bash
    chmod +x apply-eastwest-gateway.sh
    ./apply-eastwest-gateway.sh
-   oc apply -f 06-expose-istiod-lb.yaml
    oc label namespace istio-system topology.istio.io/network=main-network --overwrite
    oc -n istio-system rollout status deploy/istiod --timeout=5m
    ```
 
-   `apply-eastwest-gateway.sh` removes the legacy sidecar east-west deployment and applies:
-   - Gateway API `istio-east-west` listener on **15008** (HBONE)
-   - `istio-remote` reference `main-network-ew-ref` (required on Istio 1.28.6 so VSI ztunnel gets `network_gateway` in xDS)
+   `apply-eastwest-gateway.sh` applies `04-eastwest-gateway.yaml`, which deploys:
+   - A sidecar-injected `Deployment` (`istio: eastwestgateway`) acting as the gateway
+   - A `LoadBalancer` Service exposing ports 15012 (istiod xDS), 15017 (webhook), 15443 (data plane AUTO_PASSTHROUGH), and 15021 (health)
 
-4. Record the east-west gateway address (used on the VSI):
+4. Record the east-west gateway address (used on the VSI in step 4):
 
    ```bash
    export EW_GATEWAY_HOST=$(oc -n istio-system get svc istio-eastwestgateway \
      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-   export ISTIOD_GATEWAY_HOST=$(oc -n istio-system get svc istiod-xds-external \
-     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+   export EW_GATEWAY_IP=$(dig +short "${EW_GATEWAY_HOST}" | head -1)
    echo "EW_GATEWAY_HOST=${EW_GATEWAY_HOST}"
-   echo "ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}"
+   echo "EW_GATEWAY_IP=${EW_GATEWAY_IP}"
    ```
 
-   `meshNetworks` must define **main-network** (not `vsi-network`) so VSI ztunnel routes cross-network traffic through the east-west gateway on port **15008**, not directly to pod IPs.
-
-5. Label the application project for ambient dataplane (if `03-deploy-microservices` is not applied yet, or labels were missing):
+5. Label the application project for mesh enrollment (if not yet done before step 3):
 
    ```bash
    oc label namespace osm-poc-demo istio.io/dataplane-mode=ambient --overwrite
    oc label namespace osm-poc-demo istio-discovery=enabled --overwrite
    ```
 
-   Both labels are already set in `03-deploy-microservices/01-namespace.yaml`; `istio-discovery=enabled` is required for `discoverySelectors` on the `Istio` CR.
+   Both labels are already in `03-deploy-microservices/01-namespace.yaml`; this step is only needed if you apply them out of order.
 
-6. Verify ambient control plane and multi-network (required for VSI):
+6. Verify ambient control plane and multi-network:
 
    ```bash
    ./verify-ambient.sh
-   istioctl ztunnel-config workloads -n ztunnel | head
    ```
 
-   `verify-ambient.sh` fails if `meshNetworks` or `AMBIENT_ENABLE_MULTI_NETWORK` is missing on the live `Istio` CR.
+   All checks must print `OK`. `verify-ambient.sh` validates `meshNetworks`, `AMBIENT_ENABLE_MULTI_NETWORK`, the ztunnel DaemonSet, and the east-west gateway Deployment and LoadBalancer Service.
 
-## Expected (Working) Output
+## Expected Output
 
 ```text
-istio/default condition=Ready
-ztunnel/default condition=Ready
-ztunnel-xxxxx   1/1   Running
-istio-eastwestgateway-xxxxx   1/1   Running   (Gateway API pod)
-main-network-ew-ref           Accepted / Programmed (istio-remote reference)
+OK:    istio/default Ready
+OK:    meshNetworks present on Istio CR
+OK:    meshNetworks defines main-network (VM sidecar routes C→A via EW gateway port 15443)
+OK:    istiod AMBIENT_ENABLE_MULTI_NETWORK=true
+OK:    istiod rolled out
+OK:    ztunnel pods Running (cluster DaemonSet)
+OK:    east-west gateway Deployment present (istio-system)
+OK:    east-west gateway LoadBalancer hostname: <lb-hostname>
 ```
+
+## meshNetworks design
+
+`01-istio-ambient.yaml` configures two networks:
+
+| Network | Endpoints | Gateway |
+|---|---|---|
+| `main-network` | All cluster pods (`fromRegistry: rocks-cluster`) | EW gateway port **15443** (used by VM → cluster direction) |
+| `vm-network` | VSI CIDR (`fromCidr: 10.243.64.0/24`) | None — cluster sidecars connect **directly** to the VM's registered IP |
+
+- **C → A** (VSI → cluster): VM proxy routes through the EW gateway on port 15443 (`AUTO_PASSTHROUGH` SNI routing) because `ms-a` is on `main-network`.
+- **B → C** (cluster → VSI): `ms-b`'s Envoy connects directly to the WorkloadEntry IP (`161.156.86.195:8080`) because `vm-network` has no gateway.
 
 ## Official Documentation
 
-- [Installing Istio ambient mode (OSM 3.2)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode)
-- [Configuring network policies for ambient mode](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-configuring-network-policies-ambient)
+- [Installing Istio ambient mode (OSM 3.3)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/ossm-istio-ambient-mode)
 - [Integrate Linux VMs into OpenShift Service Mesh](https://developers.redhat.com/articles/2026/04/17/integrate-red-hat-enterprise-linux-vms-openshift-service-mesh)
-
-## Alternatives Considered
-
-| Approach | Notes |
-|---|---|
-| Ambient + ztunnel on VSI (this PoC) | Sidecar-less on cluster; dedicated ztunnel on VSI for L4 mTLS and AuthorizationPolicy |
-| Sidecar on VSI | Mature VM onboarding path; higher footprint on the VSI |
-| ServiceEntry only (no ztunnel on VSI) | Simpler routing but no mesh identity or L4 policy on the VSI workload |

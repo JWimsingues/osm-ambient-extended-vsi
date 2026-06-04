@@ -29,7 +29,7 @@ flowchart TB
   User["Demo user / curl"] -->|HTTPS Route| MSA
 
   MSA -->|mTLS :8080\nintra-cluster| MSB
-  MSB -->|mTLS → EW :15443\nSNI passthrough| MSC
+  MSB -->|direct mTLS :8080\nWorkloadEntry IP| MSC
   MSC -->|mTLS → EW :15443\nSNI passthrough| MSA
 
   ENVOY_VSI -.->|intercept outbound\niptables| MSC
@@ -57,13 +57,13 @@ mTLS is handled end-to-end by the Envoy sidecars.
 
 ```
 ms-b Envoy (outbound)
-  → EW gateway :15443  [AUTO_PASSTHROUGH, SNI: outbound_.8080_._.ms-c....]
-  → VSI :8080          [iptables PREROUTING → Envoy :15006 → ms-c app]
+  → direct mTLS → VSI 161.156.86.195:8080
+    [iptables PREROUTING → Envoy :15006 → ms-c app]
 ```
 
 Istiod pushes `ms-c`'s WorkloadEntry IP (`161.156.86.195:8080`) with `TLSMode: istio`
-as the EDS endpoint for cluster proxies. mTLS is established directly (no EW gateway hop
-is needed since `vm-network` has no gateway defined in `meshNetworks`).
+as the EDS endpoint for cluster proxies. mTLS is established **directly** — no EW gateway
+hop is needed because `vm-network` has no gateway defined in `meshNetworks`.
 
 ### C → A (VSI → cluster, cross-network)
 

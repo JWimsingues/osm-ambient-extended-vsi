@@ -1,40 +1,47 @@
-# Step 4 — VSI Sidecar onboarding (istio-sidecar.rpm)
+# Step 4 — VSI Sidecar Onboarding (istio-sidecar.rpm)
 
-This step registers the IBM Cloud VSI (`ms-c`) into the OpenShift Service Mesh using the
-Red Hat–provided `istio-sidecar.rpm`. This is the approach documented in:
+Registers the IBM Cloud VSI (`ms-c`) into the OpenShift Service Mesh using the Red Hat–provided
+`istio-sidecar.rpm`. Reference:
 [Integrate Red Hat Enterprise Linux VMs with OpenShift Service Mesh](https://developers.redhat.com/articles/2026/04/17/integrate-red-hat-enterprise-linux-vms-openshift-service-mesh)
 
 ---
 
-## Prerequisites (done once, outside the repo)
+## Prerequisites
 
 | Item | Notes |
 |------|-------|
-| RHEL 9.6+ VSI | Reachable from the cluster via its public IP |
-| ROCKS 4.20+ cluster | Istio Ambient deployed (steps 1–3) |
-| `istio-sidecar.rpm` | Download from Red Hat Customer Portal and SCP to `/tmp/istio-sidecar.rpm` on the VSI |
+| RHEL 9.6+ VSI | Reachable from the cluster on its public IP; SSH access as `vpcuser` |
+| ROCKS 4.20+ cluster | Steps 1–3 completed; east-west gateway LoadBalancer is up |
+| `istio-sidecar.rpm` | Download from [Red Hat Customer Portal](https://access.redhat.com/) and SCP to `/tmp/` on the VSI |
 
 ---
 
-## Overview
+## Architecture recap
 
 ```
-[VSI: ms-c]                         [Cluster: main-network]
-   Envoy sidecar (istio-sidecar.rpm)
-        │
-        │  mTLS over port 15443
-        ▼
-[East-West Gateway (LoadBalancer)]
-        │
-        │  AUTO_PASSTHROUGH SNI routing
-        ▼
-[ms-a sidecar]  [ms-b sidecar]
+[VSI: vm-network]                       [Cluster: main-network]
+  ms-c (Java, :8080)
+    │  iptables intercept
+    ▼
+  Envoy (istio-sidecar.rpm)
+    │  mTLS :15443 (C→A)
+    ▼
+[East-West Gateway LoadBalancer]
+    │  AUTO_PASSTHROUGH SNI routing
+    ▼
+  [ms-a Envoy sidecar]
+
+  [ms-b Envoy sidecar]
+    │  direct mTLS :8080 (B→C)
+    ▼
+  Envoy (VSI inbound, port 15006)
+    │  iptables PREROUTING
+    ▼
+  ms-c (Java, :8080)
 ```
 
-- **ms-c** runs on the VSI with the standard `istio-sidecar.rpm` (Envoy proxy + `pilot-agent`)
-- Outbound traffic from ms-c to cluster services is intercepted by iptables → Envoy → EW gateway:15443
-- Inbound traffic to ms-c from the cluster arrives at its public IP → PREROUTING redirect to Envoy:15006
-- The VSI registers automatically via `WorkloadGroup` auto-registration
+- **B → C**: `ms-b`'s Envoy connects **directly** to the VM's registered IP on port 8080 (no EW gateway hop; `vm-network` has no gateway in `meshNetworks`).
+- **C → A**: VM Envoy routes through the EW gateway port 15443 because `ms-a` is on `main-network`.
 
 ---
 
@@ -43,10 +50,7 @@ Red Hat–provided `istio-sidecar.rpm`. This is the approach documented in:
 ```bash
 # Download on your workstation (requires Red Hat account)
 OSSM_VERSION=1.28.6
-curl -L -o /tmp/istio-sidecar-${OSSM_VERSION}.rpm \
-  "https://access.redhat.com/.../istio-sidecar-${OSSM_VERSION}.rpm"
-
-# Copy to VSI (VSI has no internet access)
+# Copy RPM to VSI
 scp /tmp/istio-sidecar-${OSSM_VERSION}.rpm vpcuser@<VSI_PUBLIC_IP>:/tmp/istio-sidecar.rpm
 
 # Install on VSI
@@ -55,55 +59,52 @@ ssh vpcuser@<VSI_PUBLIC_IP> 'sudo rpm -ivh /tmp/istio-sidecar.rpm'
 
 ---
 
-## Step 4.2 — Create ServiceAccount, WorkloadGroup, and ServiceEntry on cluster
+## Step 4.2 — Create ServiceAccount, WorkloadGroup, and mesh resources (cluster)
 
 ```bash
 oc apply -f ../03-deploy-microservices/05-workload-c.yaml
+oc apply -f ../03-deploy-microservices/06-authorization-policies.yaml
 ```
 
-This creates:
-- `ServiceAccount/ms-c` in `osm-poc-demo`
-- `WorkloadGroup/ms-c` — template for auto-registration
-- `Service/ms-c` — ClusterIP service for cluster→VM traffic
-- `ServiceEntry/ms-c` — mesh-internal service entry resolved from WorkloadEntry
+This creates the `ServiceAccount/ms-c`, `WorkloadGroup/ms-c`, `Service/ms-c`, and `ServiceEntry/ms-c` in `osm-poc-demo`. The `WorkloadEntry` is auto-registered by istiod when the VM sidecar connects.
 
 ---
 
 ## Step 4.3 — Generate identity artifacts
 
-Use `istioctl` to generate the onboarding files. The command reads the WorkloadGroup
-and the EW gateway's LoadBalancer IP to populate `cluster.env`, `mesh.yaml`, `hosts`,
-`root-cert.pem`, and `istio-token`.
-
 ```bash
-# Get EW gateway external address
+# Get EW gateway external IP
 GW_HOSTNAME=$(oc get svc istio-eastwestgateway -n istio-system \
   -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-GW_IP=$(dig +short $GW_HOSTNAME | head -1)
+GW_IP=$(dig +short "${GW_HOSTNAME}" | head -1)
+echo "EW gateway IP: ${GW_IP}"
 
 mkdir -p /tmp/vm-bootstrap-ms-c
 
-# Extract the WorkloadGroup alone (required by istioctl)
+# Export WorkloadGroup for istioctl
 oc get workloadgroup ms-c -n osm-poc-demo -o yaml > /tmp/ms-c-workloadgroup.yaml
 
 istioctl x workload entry configure \
   -f /tmp/ms-c-workloadgroup.yaml \
   -o /tmp/vm-bootstrap-ms-c \
   --clusterID rocks-cluster \
-  --ingressIP "$GW_IP"
+  --ingressIP "${GW_IP}"
 ```
 
 ---
 
 ## Step 4.4 — Append VM-specific overrides to cluster.env
 
-The `istio-start.sh` auto-detects the private NIC IP. Override it with the VSI public IP
-and disable HBONE (the EW gateway exposes only port 15443 for mTLS, not 15008):
+The `istio-start.sh` script auto-detects the private NIC IP. Override it with the VSI **public** IP
+and disable HBONE (the EW gateway exposes only port 15443 for mTLS, not port 15008):
 
 ```bash
 cat >> /tmp/vm-bootstrap-ms-c/cluster.env <<EOF
+# VSI public IP — ensures istiod registers the reachable address (not private NIC IP)
 INSTANCE_IP='<VSI_PUBLIC_IP>'
+# Also set the service IP to the public address
 ISTIO_SVC_IP='<VSI_PUBLIC_IP>'
+# Disable HBONE — EW gateway uses AUTO_PASSTHROUGH mTLS on port 15443 only
 ISTIO_META_ENABLE_HBONE='false'
 EOF
 ```
@@ -111,6 +112,9 @@ EOF
 ---
 
 ## Step 4.5 — Refresh the istio-token (OpenShift-compatible)
+
+The token generated by `istioctl` uses Kubernetes token projection, which requires a different
+audience on OpenShift. Overwrite it with an `oc create token`:
 
 ```bash
 oc create token ms-c -n osm-poc-demo \
@@ -124,19 +128,27 @@ oc create token ms-c -n osm-poc-demo \
 ## Step 4.6 — Copy artifacts to VSI and start the sidecar
 
 ```bash
-ssh vpcuser@<VSI_PUBLIC_IP> 'sudo mkdir -p /var/lib/istio/envoy /etc/certs /var/run/secrets/tokens'
+VSI_PUBLIC_IP=<VSI_PUBLIC_IP>
 
-scp /tmp/vm-bootstrap-ms-c/cluster.env   vpcuser@<VSI_PUBLIC_IP>:/var/lib/istio/envoy/cluster.env
-scp /tmp/vm-bootstrap-ms-c/mesh.yaml     vpcuser@<VSI_PUBLIC_IP>:/etc/istio/config/mesh
-scp /tmp/vm-bootstrap-ms-c/root-cert.pem vpcuser@<VSI_PUBLIC_IP>:/etc/certs/root-cert.pem
-scp /tmp/vm-bootstrap-ms-c/istio-token   vpcuser@<VSI_PUBLIC_IP>:/var/run/secrets/tokens/istio-token
+ssh vpcuser@${VSI_PUBLIC_IP} 'sudo mkdir -p /var/lib/istio/envoy /var/run/secrets/istio /var/run/secrets/tokens'
 
-# Append EW-GW → istiod hostname resolution
-ssh vpcuser@<VSI_PUBLIC_IP> "echo '${GW_IP} istiod.istio-system.svc' | sudo tee -a /etc/hosts"
+scp /tmp/vm-bootstrap-ms-c/cluster.env    vpcuser@${VSI_PUBLIC_IP}:/tmp/cluster.env
+scp /tmp/vm-bootstrap-ms-c/root-cert.pem  vpcuser@${VSI_PUBLIC_IP}:/tmp/root-cert.pem
+scp /tmp/vm-bootstrap-ms-c/istio-token    vpcuser@${VSI_PUBLIC_IP}:/tmp/istio-token
 
-# Enable and start the sidecar
-ssh vpcuser@<VSI_PUBLIC_IP> 'sudo systemctl enable --now istio'
-ssh vpcuser@<VSI_PUBLIC_IP> 'sudo systemctl status istio --no-pager | head -10'
+ssh vpcuser@${VSI_PUBLIC_IP} '
+  sudo cp /tmp/cluster.env   /var/lib/istio/envoy/cluster.env
+  sudo cp /tmp/root-cert.pem /var/run/secrets/istio/root-cert.pem
+  sudo cp /tmp/istio-token   /var/run/secrets/tokens/istio-token
+  sudo chown -R istio-proxy:istio-proxy /var/lib/istio /var/run/secrets/istio /var/run/secrets/tokens
+'
+
+# Add EW gateway IP → istiod hostname mapping so the VM sidecar can reach istiod
+ssh vpcuser@${VSI_PUBLIC_IP} "echo '${GW_IP} istiod.istio-system.svc' | sudo tee -a /etc/hosts"
+
+# Enable and start the Istio sidecar
+ssh vpcuser@${VSI_PUBLIC_IP} 'sudo systemctl enable --now istio'
+ssh vpcuser@${VSI_PUBLIC_IP} 'sudo systemctl status istio --no-pager | head -10'
 ```
 
 ---
@@ -146,49 +158,119 @@ ssh vpcuser@<VSI_PUBLIC_IP> 'sudo systemctl status istio --no-pager | head -10'
 ```bash
 # WorkloadEntry should appear within seconds
 oc get workloadentry -n osm-poc-demo
+# Expected: ms-c-<IP>-vm-network   <age>   <VSI_PUBLIC_IP>
 
-# Confirm VM is in proxy-status
-istioctl proxy-status | grep vm-network
-```
-
-Expected:
-```
-NAME                                  CLUSTER        ISTIOD                VERSION
-vsi-jwims.osm-poc-demo                rocks-cluster  istiod-xxxxx          1.28.6
+# Confirm VM proxy is in sync with istiod
+istioctl proxy-status | grep vsi
+# Expected: vsi-<hostname>.osm-poc-demo   rocks-cluster   1.28.6   ...
 ```
 
 ---
 
-## Step 4.8 — Start ms-c application on VSI
+## Step 4.8 — Set up and start the ms-c application
+
+### 4.8.1 — Deploy the ms-c JAR
+
+Build the JAR locally (or reuse from `microservices/ms-c/target/`):
 
 ```bash
-ssh vpcuser@<VSI_PUBLIC_IP> \
-  'nohup sudo -u ms-c java -Djava.net.preferIPv4Stack=true \
-   -jar /opt/osm-poc/ms-c.jar \
-   > /tmp/ms-c-app.log 2>&1 &'
+cd microservices
+mvn -q clean package -DskipTests
+```
+
+Copy the fat JAR to the VSI:
+
+```bash
+scp microservices/ms-c/target/ms-c-1.0.0-SNAPSHOT.jar \
+  vpcuser@${VSI_PUBLIC_IP}:/tmp/ms-c.jar
+```
+
+### 4.8.2 — Prepare the VSI (run as root on VSI)
+
+```bash
+ssh vpcuser@${VSI_PUBLIC_IP} 'sudo bash -s' <<'EOF'
+# Create dedicated system user and directories
+useradd -r -u 185 -s /sbin/nologin ms-c 2>/dev/null || true
+mkdir -p /opt/osm-poc /var/lib/ms-c /var/log/osm-poc /etc/osm-poc
+chown ms-c:ms-c /opt/osm-poc /var/lib/ms-c /var/log/osm-poc
+
+# Deploy JAR
+cp /tmp/ms-c.jar /opt/osm-poc/ms-c.jar
+chown ms-c:ms-c /opt/osm-poc/ms-c.jar
+
+# Create environment file
+cat > /etc/osm-poc/ms-c.env <<'ENVEOF'
+MS_A_URL=http://ms-a.osm-poc-demo.svc.cluster.local:8080
+JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+ENVEOF
+
+# Install systemd unit
+cat > /etc/systemd/system/ms-c.service <<'UNITEOF'
+[Unit]
+Description=OSM PoC ms-c (native JAR on VSI)
+After=network-online.target istio.service
+Wants=network-online.target
+
+[Service]
+User=ms-c
+Group=ms-c
+EnvironmentFile=/etc/osm-poc/ms-c.env
+WorkingDirectory=/var/lib/ms-c
+ExecStart=/usr/bin/java ${JAVA_OPTS} -jar /opt/osm-poc/ms-c.jar
+StandardOutput=append:/var/log/osm-poc/ms-c.log
+StandardError=append:/var/log/osm-poc/ms-c.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+systemctl daemon-reload
+systemctl enable --now ms-c
+systemctl status ms-c --no-pager | head -10
+EOF
+```
+
+### 4.8.3 — Verify ms-c is healthy
+
+```bash
+# Health check (from VSI)
+ssh vpcuser@${VSI_PUBLIC_IP} 'curl -s http://localhost:8080/health'
+# Expected: OK
+
+# Logs (written directly to file, not to journal)
+ssh vpcuser@${VSI_PUBLIC_IP} 'sudo tail -20 /var/log/osm-poc/ms-c.log'
 ```
 
 ---
 
-## Verification
+## Step 4.9 — Token renewal
 
-From any host with access to the cluster Route:
+The `istio-token` has a 24-hour TTL. Renew it before it expires:
 
 ```bash
-MS_A_URL="https://ms-a-osm-poc-demo.<cluster-domain>"
+oc create token ms-c -n osm-poc-demo \
+  --audience=istio-ca \
+  --duration=86400s \
+  | ssh vpcuser@${VSI_PUBLIC_IP} 'sudo tee /var/run/secrets/tokens/istio-token > /dev/null && sudo systemctl restart istio'
+```
+
+---
+
+## Full verification
+
+```bash
+MS_A_URL="https://$(oc get route ms-a -n osm-poc-demo -o jsonpath='{.spec.host}')"
 
 # Health check
-curl -sk ${MS_A_URL}/health
+curl -sk "${MS_A_URL}/health"
 
 # Full chain: A → B → C → A
-curl -sk ${MS_A_URL}/api/run-chain
+TRACE=$(uuidgen | tr '[:upper:]' '[:lower:]')
+curl -sk -H "X-Trace-Id: ${TRACE}" "${MS_A_URL}/api/run-chain"
 ```
 
-Expected response (HTTP 200, ~1–2 s):
-```json
-{
-  "service": "ms-a",
-  "traceId": "<uuid>",
-  "result": "{\"service\":\"ms-b\", ... \"downstream\":\"{\\\"service\\\":\\\"ms-c\\\", ... \\\"downstream\\\":\\\"{\\\"service\\\":\\\"ms-a\\\",\\\"message\\\":\\\"ms-a handled request from ms-c\\\"}\\\"}\"}\"}"
-}
-```
+Expected: HTTP 200, ~100–400 ms, JSON with nested responses from ms-b, ms-c, and ms-a.
+
+Follow traces in step 5: [`05-verify-and-trace/README.md`](../05-verify-and-trace/README.md).

@@ -1,4 +1,4 @@
-# Purpose: Fluent Bit snippet — ship ms-c Podman logs to IBM Cloud Logs.
+# Purpose: Fluent Bit snippet — ship ms-c systemd logs to IBM Cloud Logs.
 # Copy to fluent-bit-ms-c.conf and set env vars, or let install-logs-agent-vsi.sh substitute.
 
 [PARSER]
@@ -12,14 +12,6 @@
     Path              /var/log/osm-poc/ms-c.log
     Tag               osm.ms-c
     Parser            osm_poc_json
-    Refresh_Interval  5
-    Mem_Buf_Limit     5MB
-    Skip_Long_Lines   On
-
-[INPUT]
-    Name              tail
-    Path              /var/log/osm-poc/ztunnel.log
-    Tag               osm.ztunnel
     Refresh_Interval  5
     Mem_Buf_Limit     5MB
     Skip_Long_Lines   On

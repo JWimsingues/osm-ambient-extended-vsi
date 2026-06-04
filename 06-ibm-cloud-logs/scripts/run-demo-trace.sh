@@ -5,14 +5,15 @@ set -euo pipefail
 TRACE="${TRACE_ID:-demo-$(date +%Y%m%d-%H%M%S)}"
 NS="${NAMESPACE:-osm-poc-demo}"
 
-echo "==> Trace id: ${TRACE}"
-echo "==> Calling in-mesh: http://ms-a:8080/api/run-chain"
+MS_A_HOST=$(oc -n "${NS}" get route ms-a -o jsonpath='{.spec.host}' 2>/dev/null)
+: "${MS_A_HOST:?Could not resolve ms-a Route — run: oc get route ms-a -n ${NS}}"
+MS_A_URL="https://${MS_A_HOST}"
 
-oc -n "${NS}" run "demo-trace-${TRACE:0:8}" --rm -i --restart=Never \
-  --image=curlimages/curl \
-  --labels="istio.io/dataplane-mode=ambient" \
-  --command -- \
-  curl -sf -H "X-Trace-Id: ${TRACE}" "http://ms-a:8080/api/run-chain" | tee /tmp/osm-poc-response.json
+echo "==> Trace id:  ${TRACE}"
+echo "==> Calling:   ${MS_A_URL}/api/run-chain"
+
+curl -sk -H "X-Trace-Id: ${TRACE}" "${MS_A_URL}/api/run-chain" | tee /tmp/osm-poc-response.json
+echo ""
 
 echo ""
 echo "==> IBM Cloud Logs — paste these queries (Logs viewer):"

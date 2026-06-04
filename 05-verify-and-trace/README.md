@@ -84,7 +84,7 @@ oc logs -n osm-poc-demo deployment/ms-b -c ms-b --since=5m | grep "${TRACE}"
 
 **Terminal 3 — ms-c (VSI):**
 ```bash
-ssh vpcuser@161.156.86.195 "grep '${TRACE}' /tmp/ms-c-app.log"
+ssh vpcuser@161.156.86.195 "sudo grep '${TRACE}' /var/log/osm-poc/ms-c.log"
 ```
 
 **Expected log sequence (same `traceId` across all three):**
@@ -147,16 +147,20 @@ curl -sk -o /dev/null -w "%{http_code}" "${MS_A_URL}/health"
 
 ## Step 5.4 — Inspect mesh endpoints
 
+`istioctl proxy-config endpoints` targets pods and cannot reach WorkloadEntry-backed VM proxies directly.
+Use the Envoy admin API on the VSI instead:
+
 ```bash
-# EW gateway endpoints pushed to the VM proxy (should show external IPs :15443, not pod IPs)
-istioctl proxy-config endpoints vsi-jwims.osm-poc-demo 2>/dev/null | grep "ms-a"
-# Expected: 158.177.15.125:15443 and/or 161.156.163.1:15443
+# EW gateway endpoint for ms-a (should be EW gateway IP:15443, not a pod IP)
+ssh vpcuser@161.156.86.195 \
+  "curl -s http://localhost:15000/clusters | grep 'ms-a.*15443'"
+# Expected: ...158.177.15.125:15443::cx_total::1  (EW gateway, C→A direction)
 
-# Check what endpoint the VM proxy has for ms-b
-istioctl proxy-config endpoints vsi-jwims.osm-poc-demo 2>/dev/null | grep "ms-b"
-
-# AuthZ policy decision for a given request (requires istioctl 1.18+)
-istioctl x authz check deployment/ms-a.osm-poc-demo 2>/dev/null | head -20
+# Direct endpoint for ms-c on ms-b's sidecar (should be VM public IP:8080)
+istioctl proxy-config endpoints \
+  "$(oc get pod -n osm-poc-demo -l app=ms-b -o name | head -1 | sed 's|pod/||')" \
+  -n osm-poc-demo 2>/dev/null | grep ms-c
+# Expected: 161.156.86.195:8080  (direct mTLS, B→C direction)
 ```
 
 ---
