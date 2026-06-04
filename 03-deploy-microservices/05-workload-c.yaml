@@ -31,8 +31,8 @@ metadata:
     version: v1
 spec:
   address: ${VSI_PRIVATE_IP}
-  # Required for path 2: VSI ztunnel source network must be vsi-network (not main-network).
-  network: vsi-network
+  # Do not set spec.network on Istio 1.28.6 — it prevents WorkloadEntry from reaching the VSI ztunnel xDS
+  # (use topology label + ztunnel NETWORK=vsi-network env; see 04-vsi-ztunnel/README.md).
   labels:
     app: ms-c
     version: v1
@@ -43,11 +43,11 @@ spec:
     http: 8080
 ---
 # Binds ClusterIP ms-c to the VSI IP (required for kube Service without selector).
-# WorkloadEntry.spec.network keeps the dedicated VSI ztunnel on vsi-network for path-2 egress.
+# Name must differ from WorkloadEntry metadata.name (ms-c-vsi) so istiod registers both workloads.
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:
-  name: ms-c-vsi
+  name: ms-c-endpoints
   namespace: osm-poc-demo
   labels:
     kubernetes.io/service-name: ms-c

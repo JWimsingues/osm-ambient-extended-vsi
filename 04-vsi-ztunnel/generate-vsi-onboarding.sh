@@ -68,6 +68,12 @@ fi
 
 # ztunnel xDS/CA requires audience istio-ca (not the default Kubernetes API audience).
 oc -n osm-poc-demo create token ms-c --duration="${TOKEN_DURATION}s" --audience=istio-ca >"${OUT_DIR}/istio-token"
+# istioctl workload configure defaults SERVICE_ACCOUNT=default; install-ztunnel.sh fixes cluster.env.
+if [[ -f "${OUT_DIR}/cluster.env" ]]; then
+  sed -i.bak "s/^SERVICE_ACCOUNT='default'/SERVICE_ACCOUNT='ms-c'/" "${OUT_DIR}/cluster.env"
+  sed -i.bak "s/^ISTIO_META_NETWORK=''/ISTIO_META_NETWORK='vsi-network'/" "${OUT_DIR}/cluster.env"
+  rm -f "${OUT_DIR}/cluster.env.bak"
+fi
 chmod 0644 "${OUT_DIR}/istio-token"
 echo "==> Wrote istio-token for service account ms-c (audience=istio-ca, ${TOKEN_DURATION}s)"
 

@@ -234,6 +234,11 @@ if [[ -n "${EW_IP:-}" ]]; then
   cat >>/etc/hosts <<HOSTS
 ${EW_IP} istio-eastwestgateway.istio-system.svc istio-eastwestgateway.istio-system.svc.cluster.local
 HOSTS
+  if [[ -n "${EW_GATEWAY_HOST:-}" && "${EW_GATEWAY_HOST}" != "${EW_IP}" ]]; then
+    cat >>/etc/hosts <<HOSTS
+${EW_IP} ${EW_GATEWAY_HOST}
+HOSTS
+  fi
 fi
 
 chown -R istio-proxy:istio-proxy /var/lib/istio /var/run/secrets /etc/certs /etc/istio
