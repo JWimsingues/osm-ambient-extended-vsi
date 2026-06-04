@@ -1,94 +1,201 @@
 # Step 5 — Verify Traffic and Follow Trace Logs
 
-> Troubleshooting snapshot (2026-06-03): [`docs/troubleshooting-session-2026-06-03.md`](../docs/troubleshooting-session-2026-06-03.md).  
-> Future install fixes (agent prompt): [`docs/FUTURE-FIX-PROMPT.md`](../docs/FUTURE-FIX-PROMPT.md).
+Validates the **A → B → C → A** chain, confirms RBAC enforcement, and shows how to
+correlate the `X-Trace-Id` across all three services.
 
-## Description
+---
 
-Validates the **A → B → C → A** chain and shows how to correlate logs using `X-Trace-Id` across cluster pods and the VSI.
+## Pre-flight checks
 
-## Pre-flight (automated checks)
+Run these before the chain test to confirm the mesh and VSI sidecar are healthy.
 
 ```bash
-# After step 2
-cd ../02-ambient-mesh && ./verify-ambient.sh
-
-# On the VSI (after step 4)
-sudo verify-ztunnel.sh
+# 1. All proxies synced with istiod
+istioctl proxy-status
 ```
 
-## Acceptance checklist
+Expected output includes all four proxies (no STALE):
+```
+NAME                                    CLUSTER         VERSION
+istio-eastwestgateway-xxx.istio-system  rocks-cluster   1.28.6
+ms-a-xxx.osm-poc-demo                   rocks-cluster   1.28.6
+ms-b-xxx.osm-poc-demo                   rocks-cluster   1.28.6
+vsi-jwims.osm-poc-demo                  rocks-cluster   1.28.6
+```
 
-| # | Check | Command |
-|---|--------|---------|
-| 1 | meshNetworks on Istio CR | `02-ambient-mesh/verify-ambient.sh` |
-| 2 | ms-c ztunnel endpoints | `istioctl ztunnel-config service -n ztunnel \| grep ms-c` → **1/1** |
-| 3 | B→C health | `oc exec deploy/ms-b -- curl -sf http://ms-c:8080/health` |
-| 4 | B→C handler (C→A egress) | `oc exec deploy/ms-b -- curl -sf http://ms-c:8080/api/handle-from-b` |
-| 5 | VSI iptables redirect | `sudo iptables -t nat -S OSM_ZTUNNEL_OUT \| grep 15001` |
-| 6 | Full ring | mesh-curl `run-chain` below |
+```bash
+# 2. VSI WorkloadEntry auto-registered
+oc get workloadentry -n osm-poc-demo
+# → ms-c-161.156.86.195-vm-network   <age>   161.156.86.195
 
-## Prerequisites
+# 3. Authorization policies in place
+oc get authorizationpolicy -n osm-poc-demo
+# → ms-a-allow-ingress, ms-b-allow-from-a, ms-c-allow-from-b
 
-- All prior steps completed
-- `ms-c` and `ztunnel` running on the VSI
+# 4. Pods running (2/2 = app + istio-proxy sidecar)
+oc get pod -n osm-poc-demo
+# → ms-a-xxx  2/2  Running
+# → ms-b-xxx  2/2  Running
 
-## Steps
+# 5. VSI sidecar active
+ssh vpcuser@161.156.86.195 'sudo systemctl is-active istio'
+# → active
+```
 
-1. Generate a trace id and invoke the chain from an **in-mesh** client (recommended — respects L4 policies):
+---
 
-   ```bash
-   TRACE=$(uuidgen | tr '[:upper:]' '[:lower:]')
-   oc -n osm-poc-demo run mesh-curl --rm -i --restart=Never \
-     --image=curlimages/curl \
-     --overrides='{"metadata":{"labels":{"istio.io/dataplane-mode":"ambient","ambient.istio.io/redirection":"enabled"}}}' \
-     --command -- curl -sv \
-       -H "X-Trace-Id: ${TRACE}" \
-       http://ms-a:8080/api/run-chain
-   ```
+## Step 5.1 — Run the full chain with a trace ID
 
-2. Tail logs in parallel:
+```bash
+# Get the ms-a Route hostname
+MS_A_URL="https://$(oc get route ms-a -n osm-poc-demo -o jsonpath='{.spec.host}')"
 
-   ```bash
-   oc -n osm-poc-demo logs deploy/ms-a --since=2m | grep "${TRACE}"
-   oc -n osm-poc-demo logs deploy/ms-b --since=2m | grep "${TRACE}"
-   ssh root@VSI 'podman logs ms-c 2>&1 | grep '"${TRACE}"''
-   ```
+# Generate a trace ID and call the chain
+TRACE=$(uuidgen | tr '[:upper:]' '[:lower:]')
+echo "Trace ID: ${TRACE}"
 
-3. Negative test — ms-a must not reach ms-c directly:
+curl -sk -H "X-Trace-Id: ${TRACE}" "${MS_A_URL}/api/run-chain" | python3 -m json.tool
+```
 
-   ```bash
-   oc -n osm-poc-demo exec deploy/ms-a -- \
-     curl -s -o /dev/null -w "%{http_code}" http://ms-c:8080/health || true
-   ```
+**Expected response (HTTP 200, ~100–500 ms):**
+```json
+{
+  "service": "ms-a",
+  "traceId": "<your-trace-id>",
+  "result": "{\"service\":\"ms-b\",\"traceId\":\"...\",\"downstream\":\"{\\\"service\\\":\\\"ms-c\\\",...\\\"downstream\\\":\\\"{\\\\\\\"service\\\\\\\":\\\\\\\"ms-a\\\\\\\",\\\\\\\"message\\\\\\\":\\\\\\\"ms-a handled request from ms-c\\\\\\\"}\\\"}\"}\"}"
+}
+```
 
-   Expect connection reset / RBAC denial (not HTTP 200 from mesh policy).
+---
 
-4. OpenShift/Kiali (optional):
+## Step 5.2 — Follow trace logs across all services
 
-   ```bash
-   oc get kiali -A
-   ```
+Open three terminals and grep for the trace ID.
 
-   Inspect ambient workloads and ztunnel metrics in the Kiali console.
+**Terminal 1 — ms-a (cluster):**
+```bash
+oc logs -n osm-poc-demo deployment/ms-a -c ms-a --since=5m | grep "${TRACE}"
+```
 
-## Expected Log Sequence
+**Terminal 2 — ms-b (cluster):**
+```bash
+oc logs -n osm-poc-demo deployment/ms-b -c ms-b --since=5m | grep "${TRACE}"
+```
 
-| Order | Service | Action |
-|---|---|---|
-| 1 | ms-a | `CALL_B` |
-| 2 | ms-b | `FROM_A` |
-| 3 | ms-b | `CALL_C` |
-| 4 | ms-c | `FROM_B` |
-| 5 | ms-c | `CALL_A` |
-| 6 | ms-a | `FROM_C` |
+**Terminal 3 — ms-c (VSI):**
+```bash
+ssh vpcuser@161.156.86.195 "grep '${TRACE}' /tmp/ms-c-app.log"
+```
 
-## IBM Cloud Logs
+**Expected log sequence (same `traceId` across all three):**
 
-To export and query the same trace in IBM Cloud Logs, see [`docs/demo-runbook-ibm-cloud-logs.md`](../docs/demo-runbook-ibm-cloud-logs.md) and run [`06-ibm-cloud-logs/scripts/run-demo-trace.sh`](../06-ibm-cloud-logs/scripts/run-demo-trace.sh).
+| Order | Service | Action   | Message |
+|-------|---------|----------|---------|
+| 1     | ms-a    | CALL_B   | ms-a is calling ms-b |
+| 2     | ms-b    | FROM_A   | ms-b received call from ms-a |
+| 3     | ms-b    | CALL_C   | ms-b is calling ms-c |
+| 4     | ms-c    | FROM_B   | ms-c received call from ms-b |
+| 5     | ms-c    | CALL_A   | ms-c is calling ms-a (closing the loop) |
+| 6     | ms-a    | FROM_C   | ms-a received call from ms-c (end of chain) |
 
-## Official Documentation
+---
 
-- [ztunnel telemetry](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode)
-- [Kiali for OSM](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-installing-kiali)
-- [IBM Cloud Logs](https://cloud.ibm.com/docs/cloud-logs?topic=cloud-logs-getting-started)
+## Step 5.3 — Verify RBAC enforcement
+
+The `AuthorizationPolicy` resources restrict each service to call only its designated downstream.
+All checks use `curl` from within the running pod via `oc exec`.
+
+```bash
+# A → B: ALLOWED (ms-a can call ms-b)
+oc exec -n osm-poc-demo deployment/ms-a -c ms-a -- \
+  curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+  http://ms-b.osm-poc-demo.svc.cluster.local:8080/health
+# Expected: 200
+```
+
+```bash
+# A → C: BLOCKED (ms-a cannot call ms-c directly)
+oc exec -n osm-poc-demo deployment/ms-a -c ms-a -- \
+  curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+  http://ms-c.osm-poc-demo.svc.cluster.local:8080/health
+# Expected: 403
+```
+
+```bash
+# B → C: ALLOWED (ms-b can call ms-c)
+oc exec -n osm-poc-demo deployment/ms-b -c ms-b -- \
+  curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+  http://ms-c.osm-poc-demo.svc.cluster.local:8080/health
+# Expected: 200
+```
+
+```bash
+# B → A: BLOCKED (ms-b cannot call ms-a)
+oc exec -n osm-poc-demo deployment/ms-b -c ms-b -- \
+  curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+  http://ms-a.osm-poc-demo.svc.cluster.local:8080/health
+# Expected: 403
+```
+
+```bash
+# External → A: ALLOWED (OpenShift Route, no Istio identity)
+curl -sk -o /dev/null -w "%{http_code}" "${MS_A_URL}/health"
+# Expected: 200
+```
+
+---
+
+## Step 5.4 — Inspect mesh endpoints
+
+```bash
+# EW gateway endpoints pushed to the VM proxy (should show external IPs :15443, not pod IPs)
+istioctl proxy-config endpoints vsi-jwims.osm-poc-demo 2>/dev/null | grep "ms-a"
+# Expected: 158.177.15.125:15443 and/or 161.156.163.1:15443
+
+# Check what endpoint the VM proxy has for ms-b
+istioctl proxy-config endpoints vsi-jwims.osm-poc-demo 2>/dev/null | grep "ms-b"
+
+# AuthZ policy decision for a given request (requires istioctl 1.18+)
+istioctl x authz check deployment/ms-a.osm-poc-demo 2>/dev/null | head -20
+```
+
+---
+
+## Step 5.5 — Service info endpoints
+
+Each microservice exposes `/api/info` describing its role and allowed callers:
+
+```bash
+# ms-a info (via Route)
+curl -sk "${MS_A_URL}/api/info" | python3 -m json.tool
+
+# ms-b info (from inside ms-a pod — cross-sidecar)
+oc exec -n osm-poc-demo deployment/ms-a -c ms-a -- \
+  curl -s http://ms-b.osm-poc-demo.svc.cluster.local:8080/api/info | python3 -m json.tool
+
+# ms-c info (from inside ms-b pod — cross-network)
+oc exec -n osm-poc-demo deployment/ms-b -c ms-b -- \
+  curl -s http://ms-c.osm-poc-demo.svc.cluster.local:8080/api/info | python3 -m json.tool
+```
+
+---
+
+## Step 5.6 — IBM Cloud Logs (optional)
+
+To export and query the same trace in IBM Cloud Logs, see
+[`docs/demo-runbook-ibm-cloud-logs.md`](../docs/demo-runbook-ibm-cloud-logs.md)
+and run [`06-ibm-cloud-logs/scripts/run-demo-trace.sh`](../06-ibm-cloud-logs/scripts/run-demo-trace.sh).
+
+---
+
+## Quick summary table
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Chain (HTTP) | `curl "${MS_A_URL}/api/run-chain"` | `200` |
+| ms-a → ms-b | `oc exec ms-a -- curl ms-b:8080/health` | `200` |
+| ms-a → ms-c | `oc exec ms-a -- curl ms-c:8080/health` | `403` |
+| ms-b → ms-c | `oc exec ms-b -- curl ms-c:8080/health` | `200` |
+| ms-b → ms-a | `oc exec ms-b -- curl ms-a:8080/health` | `403` |
+| VSI sidecar  | `systemctl is-active istio` on VSI | `active` |
+| WorkloadEntry | `oc get workloadentry -n osm-poc-demo` | `ms-c-161.156.86.195-vm-network` |
