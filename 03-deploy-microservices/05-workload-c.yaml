@@ -31,6 +31,8 @@ metadata:
     version: v1
 spec:
   address: ${VSI_PRIVATE_IP}
+  # Required for path 2: VSI ztunnel source network must be vsi-network (not main-network).
+  network: vsi-network
   labels:
     app: ms-c
     version: v1
@@ -41,6 +43,7 @@ spec:
     http: 8080
 ---
 # Binds ClusterIP ms-c to the VSI IP (required for kube Service without selector).
+# WorkloadEntry.spec.network keeps the dedicated VSI ztunnel on vsi-network for path-2 egress.
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:

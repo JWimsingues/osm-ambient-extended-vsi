@@ -19,6 +19,7 @@ spec:
           endpoints:
             - fromRegistry: rocks-cluster
           gateways:
+            # Ambient HBONE gateway (Gateway API class istio-east-west); see 04-eastwest-gateway.yaml
             - registryServiceName: istio-eastwestgateway.istio-system.svc.cluster.local
               port: 15008
         # VSI workloads (WorkloadEntry spec.network) are reachable at their registered address.

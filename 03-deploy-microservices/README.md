@@ -54,7 +54,7 @@ Deploys microservices **ms-a** and **ms-b** in project `osm-poc-demo` with OpenS
    oc apply -f 06-authorization-policies.yaml
    ```
 
-   `apply-workload-c.sh` substitutes `VSI_PRIVATE_IP` into `05-workload-c.yaml` (WorkloadEntry + EndpointSlice with `serviceAccountName: ms-c`).
+   `apply-workload-c.sh` substitutes `VSI_PRIVATE_IP` into `05-workload-c.yaml` (WorkloadEntry with `network: vsi-network` + EndpointSlice with `serviceAccountName: ms-c`).
 
 4. Wait for pods:
 

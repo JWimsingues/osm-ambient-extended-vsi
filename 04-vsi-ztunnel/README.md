@@ -226,7 +226,7 @@ Ensure VSI security group allows **outbound TCP 15012** to the east-west gateway
 
 ### `istioctl ztunnel-config service` shows `ms-c` with `0/0` endpoints
 
-The Kubernetes `Service` for ms-c has **no pod selector**, so the ClusterIP has no backends until an **`EndpointSlice`** points at the VSI IP (see `03-deploy-microservices/05-workload-c.yaml`). A `ServiceEntry` with `workloadSelector` alone is **not** sufficient in ambient mode — you need the VIP wired to `10.243.64.9`.
+The Kubernetes `Service` for ms-c has **no pod selector**, so the ClusterIP needs an **`EndpointSlice`** to the VSI IP (see `03-deploy-microservices/05-workload-c.yaml`). **`WorkloadEntry.spec.network: vsi-network`** is required so the dedicated VSI ztunnel is the source network for path-2 egress (without it, ztunnel dials pod `:15008` instead of the east-west LB).
 
 Apply with your VSI private IP:
 
@@ -311,7 +311,7 @@ grep PROXY_WORKLOAD_INFO /etc/systemd/system/ztunnel.service
 
 For **ms-c → ms-a** failures, also check: ms-c on **host network**, `meshNetworks` applied (`02-ambient-mesh/01-istio-ambient.yaml`), and mesh DNS via ztunnel.
 
-**Cross-network C→A (VSI → cluster):** On Istio **1.28.x** (OSM 3.2), VSI ztunnel may still dial the **pod IP on :15008** instead of the east-west gateway. Confirm with `sudo journalctl -u ztunnel | grep ms-a` — you want `dst.addr=<east-west-LB-IP>:15008`, not `172.17.x.x`. From the VSI, `timeout 3 bash -c 'echo >/dev/tcp/<EW_LB_IP>/15008'` must succeed (pod IPs will not). Ensure `MS_A_URL` uses the mesh FQDN (`http://ms-a.osm-poc-demo.svc.cluster.local:8080`), not a ClusterIP. Re-run `sudo -E ./run-ms-c.sh` after onboarding. Full ambient multi-network egress via the gateway is **Beta in Istio 1.29+**; until upgrade, treat open VPC paths or OSM 3.3 as the long-term fix.
+**Cross-network C→A (VSI → cluster, path 2):** Requires (1) `02-ambient-mesh/apply-eastwest-gateway.sh` (Gateway API + `main-network-ew-ref`), (2) `WorkloadEntry.spec.network: vsi-network`, (3) no `EndpointSlice` for ms-c. On the VSI, `curl -s http://127.0.0.1:15000/config_dump` must show `networkGateway` on the ms-a workload and `config.network: vsi-network`. `sudo journalctl -u ztunnel | grep ms-a` should show `dst.addr=<EW_LB hostname or IP>:15008`, not `172.17.x.x`. Map the EW LB in `/etc/hosts` via `install-ztunnel.sh` / `ew-gateway.env`.
 
 ### `curl` to `127.0.0.1:8080/api/call-a` → `Empty reply from server`
 

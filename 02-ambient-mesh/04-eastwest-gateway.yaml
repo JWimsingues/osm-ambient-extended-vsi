@@ -1,49 +1,22 @@
-# Purpose: East-west gateway for multi-network mesh (cluster <-> IBM Cloud VSI).
-apiVersion: v1
-kind: Service
+# Purpose: Ambient HBONE east-west gateway (path 2 — software routing via EW LB :15008).
+# Replaces the legacy sidecar-based east-west deployment (TLS passthrough :15008 is not used by ztunnel).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
 metadata:
   name: istio-eastwestgateway
   namespace: istio-system
   labels:
-    istio: eastwestgateway
     topology.istio.io/network: main-network
 spec:
-  type: LoadBalancer
-  selector:
-    istio: eastwestgateway
-  ports:
-    - name: tls-xds
-      port: 15012
-      targetPort: 15012
-    - name: tls-webhook
-      port: 15017
-      targetPort: 15017
-    - name: tls-hbone
+  gatewayClassName: istio-east-west
+  listeners:
+    - name: mesh
       port: 15008
-      targetPort: 15008
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: istio-eastwestgateway
-  namespace: istio-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      istio: eastwestgateway
-  template:
-    metadata:
-      annotations:
-        inject.istio.io/templates: gateway
-      labels:
-        istio: eastwestgateway
-        sidecar.istio.io/inject: "true"
-        topology.istio.io/network: main-network
-    spec:
-      containers:
-        - name: istio-proxy
-          image: auto
-          env:
-            - name: ISTIO_META_REQUESTED_NETWORK_VIEW
-              value: main-network
+      protocol: HBONE
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        options:
+          gateway.istio.io/tls-terminate-mode: ISTIO_MUTUAL

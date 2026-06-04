@@ -34,10 +34,26 @@ oc -n istio-system rollout status deploy/istiod --timeout=5m &>/dev/null \
   && ok "istiod rolled out" \
   || err "istiod rollout incomplete"
 
-if oc -n ztunnel get pods --field-selector=status.phase=Running 2>/dev/null | grep -qE '^ztunnel-'; then
+if oc -n ztunnel get pods 2>/dev/null | awk 'NR>1 && $3=="Running" {found=1} END{exit !found}'; then
   ok "ztunnel pods Running"
 else
   err "no Running ztunnel pods in namespace ztunnel"
+fi
+
+if oc -n istio-system get gateway.gateway.networking.k8s.io istio-eastwestgateway &>/dev/null; then
+  ok "Gateway API ambient east-west (istio-eastwestgateway)"
+else
+  err "missing Gateway istio-eastwestgateway — run ./apply-eastwest-gateway.sh"
+fi
+
+if oc -n istio-system get gateway.gateway.networking.k8s.io main-network-ew-ref &>/dev/null; then
+  ok "istio-remote network reference (main-network-ew-ref)"
+else
+  err "missing main-network-ew-ref — run ./apply-eastwest-gateway.sh (required for VSI network_gateway)"
+fi
+
+if oc -n istio-system get deploy -l istio=eastwestgateway 2>/dev/null | grep -q eastwestgateway; then
+  err "legacy sidecar east-west deployment still present — run ./apply-eastwest-gateway.sh"
 fi
 
 exit "${fail}"

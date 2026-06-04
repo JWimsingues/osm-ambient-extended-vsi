@@ -33,16 +33,19 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
    oc -n ztunnel get pods
    ```
 
-3. Deploy east-west gateway and expose `istiod` (multi-network / VSI onboarding):
+3. Deploy ambient east-west gateway (path 2 — HBONE `:15008`) and expose `istiod` for the VSI:
 
    ```bash
-   oc apply -f 04-eastwest-gateway.yaml
-   oc -n istio-system rollout status deploy/istio-eastwestgateway --timeout=5m
-   oc apply -f 05-expose-istiod.yaml
+   chmod +x apply-eastwest-gateway.sh
+   ./apply-eastwest-gateway.sh
    oc apply -f 06-expose-istiod-lb.yaml
    oc label namespace istio-system topology.istio.io/network=main-network --overwrite
    oc -n istio-system rollout status deploy/istiod --timeout=5m
    ```
+
+   `apply-eastwest-gateway.sh` removes the legacy sidecar east-west deployment and applies:
+   - Gateway API `istio-east-west` listener on **15008** (HBONE)
+   - `istio-remote` reference `main-network-ew-ref` (required on Istio 1.28.6 so VSI ztunnel gets `network_gateway` in xDS)
 
 4. Record the east-west gateway address (used on the VSI):
 
@@ -81,7 +84,8 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
 istio/default condition=Ready
 ztunnel/default condition=Ready
 ztunnel-xxxxx   1/1   Running
-istio-eastwestgateway-xxxxx   2/2   Running
+istio-eastwestgateway-xxxxx   1/1   Running   (Gateway API pod)
+main-network-ew-ref           Accepted / Programmed (istio-remote reference)
 ```
 
 ## Official Documentation

@@ -17,5 +17,6 @@ EOF
 fi
 
 export VSI_PRIVATE_IP
+oc -n osm-poc-demo delete serviceentry ms-c --ignore-not-found
 envsubst '${VSI_PRIVATE_IP}' < 05-workload-c.yaml | oc apply -f -
 echo "Applied 05-workload-c.yaml with VSI_PRIVATE_IP=${VSI_PRIVATE_IP}"
