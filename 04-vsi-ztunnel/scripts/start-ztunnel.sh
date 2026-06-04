@@ -1,64 +1,73 @@
 #!/usr/bin/env bash
-# Resolve east-west gateway IP at runtime and start ztunnel (LB IPs can change).
+# Start native ztunnel (host network, no containers).
 set -euo pipefail
 
 EW_GATEWAY_CONFIG=/etc/istio/ew-gateway.env
 # shellcheck source=/dev/null
 [[ -f "${EW_GATEWAY_CONFIG}" ]] && source "${EW_GATEWAY_CONFIG}"
-# xDS/CA uses istiod LB (06-expose-istiod-lb.yaml); HBONE multi-network uses east-west gateway separately.
 : "${ISTIOD_GATEWAY_HOST:=${EW_GATEWAY_HOST:-}}"
 : "${ISTIOD_GATEWAY_HOST:?ISTIOD_GATEWAY_HOST or EW_GATEWAY_HOST must be set in ${EW_GATEWAY_CONFIG}}"
 
-: "${ZTUNNEL_IMAGE:=docker.io/istio/ztunnel:1.28.6}"
+: "${ZTUNNEL_BIN:=/usr/local/bin/ztunnel}"
+: "${ZTUNNEL_LIBS_ROOT:=/opt/istio/ztunnel-libs}"
+: "${ZTUNNEL_LIB_DIR:=${ZTUNNEL_LIBS_ROOT}/usr/lib/x86_64-linux-gnu}"
+: "${ZTUNNEL_LD:=${ZTUNNEL_LIBS_ROOT}/usr/lib64/ld-linux-x86-64.so.2}"
 : "${PROXY_WORKLOAD_INFO:=osm-poc-demo/ms-c-vsi/ms-c}"
 
-if [[ -n "${ISTIOD_GATEWAY_IP:-}" ]]; then
-  EW_GATEWAY_IP="${ISTIOD_GATEWAY_IP}"
-elif [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  EW_GATEWAY_IP="${ISTIOD_GATEWAY_HOST}"
-else
-  EW_GATEWAY_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" | awk '{print $1; exit}')"
+ztunnel_exec() {
+  if [[ -f "${ZTUNNEL_LD}" && -f "${ZTUNNEL_LIB_DIR}/libc.so.6" ]]; then
+    exec "${ZTUNNEL_LD}" --library-path "${ZTUNNEL_LIB_DIR}" "${ZTUNNEL_BIN}" "$@"
+  fi
+  exec "${ZTUNNEL_BIN}" "$@"
+}
+
+if [[ ! -x "${ZTUNNEL_BIN}" ]]; then
+  echo "ERROR: ${ZTUNNEL_BIN} missing — re-run install-ztunnel.sh after copying vsi-onboarding/ztunnel" >&2
+  exit 1
 fi
-if [[ -z "${EW_GATEWAY_IP}" ]]; then
+
+if [[ -n "${ISTIOD_GATEWAY_IP:-}" ]]; then
+  ISTIOD_IP="${ISTIOD_GATEWAY_IP}"
+elif [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  ISTIOD_IP="${ISTIOD_GATEWAY_HOST}"
+else
+  ISTIOD_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
+fi
+if [[ -z "${ISTIOD_IP}" ]]; then
   echo "ERROR: cannot resolve ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}" >&2
   exit 1
 fi
 
-grep -v 'istiod\.istio-system\.svc' /etc/hosts > /etc/hosts.tmp || true
-mv /etc/hosts.tmp /etc/hosts
-cat >>/etc/hosts <<HOSTS
-${EW_GATEWAY_IP} istiod.istio-system.svc istiod.istio-system.svc.cluster.local
-HOSTS
+if [[ -n "${EW_GATEWAY_IP:-}" ]]; then
+  EW_IP="${EW_GATEWAY_IP}"
+elif [[ -n "${EW_GATEWAY_HOST:-}" ]]; then
+  if [[ "${EW_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    EW_IP="${EW_GATEWAY_HOST}"
+  else
+    EW_IP="$(getent ahostsv4 "${EW_GATEWAY_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  fi
+fi
 
-exec /usr/bin/podman run --rm --name ztunnel \
-  --network host \
-  --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_ADMIN \
-  -v /var/lib/istio:/var/lib/istio \
-  -v /var/run/secrets/tokens:/var/run/secrets/tokens \
-  -v /var/run/secrets/istio:/var/run/secrets/istio \
-  -v /etc/certs:/etc/certs \
-  -v /etc/istio/config:/etc/istio/config \
-  -v /etc/istio/proxy:/etc/istio/proxy \
-  -v /etc/hosts:/etc/hosts:ro \
-  --add-host "istiod.istio-system.svc:${EW_GATEWAY_IP}" \
-  --add-host "istiod.istio-system.svc.cluster.local:${EW_GATEWAY_IP}" \
-  -e PROXY_MODE=dedicated \
-  -e PROXY_WORKLOAD_INFO="${PROXY_WORKLOAD_INFO}" \
-  -e NETWORK=vsi-network \
-  -e SERVICE_ACCOUNT=ms-c \
-  -e ISTIO_META_SERVICE_ACCOUNT=ms-c \
-  -e ISTIO_META_NETWORK=vsi-network \
-  -e CA_ADDRESS="${EW_GATEWAY_IP}:15012" \
-  -e XDS_ADDRESS="${EW_GATEWAY_IP}:15012" \
-  -e ALT_XDS_HOSTNAME=istiod.istio-system.svc \
-  -e ALT_CA_HOSTNAME=istiod.istio-system.svc \
-  -e XDS_ROOT_CA=/var/run/secrets/istio/root-cert.pem \
-  -e CA_ROOT_CA=/var/run/secrets/istio/root-cert.pem \
-  -e ISTIO_META_CLUSTER_ID=rocks-cluster \
-  -e CLUSTER_ID=rocks-cluster \
-  -e ISTIO_META_ENABLE_HBONE=true \
-  -e ISTIO_META_DNS_CAPTURE=true \
-  -e ISTIO_META_DNS_AUTO_ALLOCATE=true \
-  -e ISTIO_META_DNS_PROXY_ADDR=127.0.0.1:15053 \
-  -e RUST_LOG=info \
-  "${ZTUNNEL_IMAGE}"
+# /etc/hosts is updated by install-ztunnel.sh (istio-proxy cannot write it at runtime).
+
+export PROXY_MODE=dedicated
+export PROXY_WORKLOAD_INFO="${PROXY_WORKLOAD_INFO}"
+export NETWORK=vsi-network
+export SERVICE_ACCOUNT=ms-c
+export ISTIO_META_SERVICE_ACCOUNT=ms-c
+export ISTIO_META_NETWORK=vsi-network
+export CA_ADDRESS="${ISTIOD_IP}:15012"
+export XDS_ADDRESS="${ISTIOD_IP}:15012"
+export ALT_XDS_HOSTNAME=istiod.istio-system.svc
+export ALT_CA_HOSTNAME=istiod.istio-system.svc
+export XDS_ROOT_CA=/var/run/secrets/istio/root-cert.pem
+export CA_ROOT_CA=/var/run/secrets/istio/root-cert.pem
+export ISTIO_META_CLUSTER_ID=rocks-cluster
+export CLUSTER_ID=rocks-cluster
+export ISTIO_META_ENABLE_HBONE=true
+export ISTIO_META_DNS_CAPTURE=true
+export ISTIO_META_DNS_AUTO_ALLOCATE=true
+export ISTIO_META_DNS_PROXY_ADDR=127.0.0.1:15053
+export RUST_LOG=info
+
+ztunnel_exec

@@ -59,7 +59,8 @@ Use `sudo` for package installation and systemd on the VSI.
 ### 3. Prepare the VSI (OS packages)
 
 ```bash
-sudo dnf install -y podman java-21-openjdk-headless
+sudo dnf install -y java-21-openjdk-headless iptables socat
+# ztunnel + ms-c run natively (no podman on the VSI). Workstation uses podman only to extract ztunnel in fetch-ztunnel-binary.sh.
 sudo useradd --system --gid 1000 --home-dir /var/lib/istio istio-proxy 2>/dev/null || true
 ```
 
@@ -274,7 +275,7 @@ oc -n osm-poc-demo run mesh-curl --rm -i --restart=Never \
 
 `curl` may still print a ClusterIP (e.g. `172.21.x.x`) — that is normal. With ambient redirection, traffic must go through ztunnel to the VSI on **15008**, not to the VIP:8080 directly.
 
-While that runs, on the VSI: `sudo podman logs -f ztunnel` — you should see **inbound/HBONE** log lines (not only `workload.Address` updates). If there is no inbound activity, packets never reach the VSI.
+While that runs, on the VSI: `sudo journalctl -u ztunnel -f` — you should see **inbound/HBONE** log lines (not only `workload.Address` updates). If there is no inbound activity, packets never reach the VSI.
 
 **`curl: (7) Could not connect` in ~3 ms** usually means no TCP listener or no route (wrong IP, security group, or endpoint removed from xDS). **`Connection reset by peer`** from `oc rsh deploy/ms-b` often means something answered then closed (ztunnel rejecting non-HBONE traffic, or a flaky endpoint).
 
@@ -310,7 +311,7 @@ grep PROXY_WORKLOAD_INFO /etc/systemd/system/ztunnel.service
 
 For **ms-c → ms-a** failures, also check: ms-c on **host network**, `meshNetworks` applied (`02-ambient-mesh/01-istio-ambient.yaml`), and mesh DNS via ztunnel.
 
-**Cross-network C→A (VSI → cluster):** On Istio **1.28.x** (OSM 3.2), VSI ztunnel may still dial the **pod IP on :15008** instead of the east-west gateway. Confirm with `sudo podman logs ztunnel | grep ms-a` — you want `dst.addr=<east-west-LB-IP>:15008`, not `172.17.x.x`. From the VSI, `timeout 3 bash -c 'echo >/dev/tcp/<EW_LB_IP>/15008'` must succeed (pod IPs will not). Ensure `MS_A_URL` uses the mesh FQDN (`http://ms-a.osm-poc-demo.svc.cluster.local:8080`), not a ClusterIP. Re-run `sudo -E ./run-ms-c.sh` after onboarding. Full ambient multi-network egress via the gateway is **Beta in Istio 1.29+**; until upgrade, treat open VPC paths or OSM 3.3 as the long-term fix.
+**Cross-network C→A (VSI → cluster):** On Istio **1.28.x** (OSM 3.2), VSI ztunnel may still dial the **pod IP on :15008** instead of the east-west gateway. Confirm with `sudo journalctl -u ztunnel | grep ms-a` — you want `dst.addr=<east-west-LB-IP>:15008`, not `172.17.x.x`. From the VSI, `timeout 3 bash -c 'echo >/dev/tcp/<EW_LB_IP>/15008'` must succeed (pod IPs will not). Ensure `MS_A_URL` uses the mesh FQDN (`http://ms-a.osm-poc-demo.svc.cluster.local:8080`), not a ClusterIP. Re-run `sudo -E ./run-ms-c.sh` after onboarding. Full ambient multi-network egress via the gateway is **Beta in Istio 1.29+**; until upgrade, treat open VPC paths or OSM 3.3 as the long-term fix.
 
 ### `curl` to `127.0.0.1:8080/api/call-a` → `Empty reply from server`
 

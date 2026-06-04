@@ -29,7 +29,7 @@ elif curl -sf --max-time 3 http://127.0.0.1:15000/config_dump 2>/dev/null | grep
   ok "ztunnel config_dump shows Healthy workloads (readiness HTTP not 200 yet)"
 else
   err "ztunnel not ready — check: journalctl -u ztunnel | grep -i xds; ensure /etc/hosts istiod IP matches current east-west LB (re-run install-ztunnel.sh)"
-  sudo podman logs ztunnel 2>&1 | grep -iE 'xds|ready|error' | tail -5 >&2 || true
+  journalctl -u ztunnel --no-pager -n 20 2>&1 | grep -iE 'xds|ready|error' | tail -5 >&2 || true
 fi
 
 EW_GATEWAY_CONFIG=/etc/istio/ew-gateway.env

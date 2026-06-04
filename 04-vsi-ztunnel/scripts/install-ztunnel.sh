@@ -42,6 +42,7 @@ install -d -m 0755 /etc/istio
 write_ew_gateway_env() {
   cat >"${EW_GATEWAY_CONFIG}" <<EOF
 EW_GATEWAY_HOST=${EW_GATEWAY_HOST}
+EW_GATEWAY_IP=${EW_GATEWAY_IP:-}
 ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST}
 ISTIOD_GATEWAY_IP=${ISTIOD_GATEWAY_IP:-}
 EOF
@@ -53,11 +54,14 @@ echo "==> ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} (xDS/CA, saved in ${EW_GATE
 [[ -n "${ISTIOD_GATEWAY_IP:-}" ]] && echo "==> ISTIOD_GATEWAY_IP=${ISTIOD_GATEWAY_IP}"
 # Align with OSM 3.3 / Istio 1.28.6 (accept "1.28.6" or "v1.28.6").
 : "${ZTUNNEL_VERSION:=1.28.6}"
+: "${ZTUNNEL_BIN:=/usr/local/bin/ztunnel}"
 # Must match WorkloadEntry metadata.name (see 03-deploy-microservices/05-workload-c.yaml).
 : "${PROXY_WORKLOAD_NAME:=ms-c-vsi}"
 PROXY_WORKLOAD_INFO="osm-poc-demo/${PROXY_WORKLOAD_NAME}/ms-c"
-ZTUNNEL_IMAGE_TAG="${ZTUNNEL_VERSION#v}"
-: "${ZTUNNEL_IMAGE:=docker.io/istio/ztunnel:${ZTUNNEL_IMAGE_TAG}}"
+: "${MS_C_JAR_SRC:=${ONBOARD_DIR}/ms-c-1.0.0-SNAPSHOT.jar}"
+
+echo "==> Installing packages (no podman — native ztunnel + JAR)"
+dnf install -y iptables socat java-21-openjdk-headless 2>/dev/null || true
 
 echo "==> Creating istio-proxy user and directories"
 groupadd --system istio-proxy 2>/dev/null || true
@@ -69,19 +73,51 @@ install -d -m 0750 -o istio-proxy -g istio-proxy \
   /var/run/secrets/istio \
   /etc/certs \
   /etc/istio/config \
-  /etc/istio/proxy
+  /etc/istio/proxy \
+  /opt/osm-poc \
+  /etc/osm-poc
 
-echo "==> Pulling ztunnel ${ZTUNNEL_IMAGE_TAG} from ${ZTUNNEL_IMAGE}"
-# Run ztunnel in the official image (do not copy the binary to the host). The image is built
-# with a newer glibc than many IBM Cloud RHEL 9 VSIs provide; extracting /usr/local/bin/ztunnel
-# fails at runtime with "GLIBC_2.38 not found".
-if ! podman image exists "${ZTUNNEL_IMAGE}" 2>/dev/null; then
-  podman pull "${ZTUNNEL_IMAGE}" || {
-    echo "ERROR: cannot pull ${ZTUNNEL_IMAGE} and image is not cached locally" >&2
+ZTUNNEL_SRC="${ONBOARD_DIR}/ztunnel"
+ZTUNNEL_LIBS_SRC="${ONBOARD_DIR}/ztunnel-libs"
+if [[ -f "${ZTUNNEL_SRC}" ]]; then
+  echo "==> Installing native ztunnel from ${ZTUNNEL_SRC}"
+  install -m 0755 -o root -g root "${ZTUNNEL_SRC}" "${ZTUNNEL_BIN}"
+  if [[ -d "${ZTUNNEL_LIBS_SRC}/usr/lib/x86_64-linux-gnu" ]]; then
+    echo "==> Installing ztunnel runtime libs (bundled GLIBC from image)"
+    rm -rf /opt/istio/ztunnel-libs
+    mkdir -p /opt/istio
+    cp -a "${ZTUNNEL_LIBS_SRC}" /opt/istio/ztunnel-libs
+  fi
+  _ld="/opt/istio/ztunnel-libs/usr/lib64/ld-linux-x86-64.so.2"
+  _lib="/opt/istio/ztunnel-libs/usr/lib/x86_64-linux-gnu"
+  if [[ -f "${_ld}" && -f "${_lib}/libc.so.6" ]]; then
+    _run=("${_ld}" --library-path "${_lib}" "${ZTUNNEL_BIN}" version)
+  else
+    _run=("${ZTUNNEL_BIN}" version)
+  fi
+  if ! runuser -u istio-proxy -- "${_run[@]}" &>/dev/null; then
+    echo "ERROR: ${ZTUNNEL_BIN} failed to run on this host." >&2
+    echo "       Re-run ./fetch-ztunnel-binary.sh on the workstation and copy vsi-onboarding/ again." >&2
     exit 1
-  }
+  fi
+  echo "==> $(runuser -u istio-proxy -- "${_run[@]}" 2>/dev/null | head -1)"
 else
-  echo "==> Using cached image ${ZTUNNEL_IMAGE}"
+  echo "ERROR: ${ZTUNNEL_SRC} missing — on workstation run:" >&2
+  echo "  ./fetch-ztunnel-binary.sh && scp vsi-onboarding/ztunnel to the VSI" >&2
+  exit 1
+fi
+
+if [[ -f "${MS_C_JAR_SRC}" ]]; then
+  install -m 0644 "${MS_C_JAR_SRC}" /opt/osm-poc/ms-c.jar
+  echo "==> Installed ms-c JAR at /opt/osm-poc/ms-c.jar"
+else
+  echo "WARN: ${MS_C_JAR_SRC} missing — run package-ms-c-jar.sh on workstation before install" >&2
+fi
+
+# Retire container-based PoC services if present.
+systemctl stop ms-c.service 2>/dev/null || true
+if command -v podman &>/dev/null; then
+  podman rm -f ms-c ztunnel 2>/dev/null || true
 fi
 
 if [[ -d "${ONBOARD_DIR}" ]]; then
@@ -163,42 +199,65 @@ if [[ ! -f /var/run/secrets/tokens/istio-token ]]; then
   echo "WARN: /var/run/secrets/tokens/istio-token missing — ztunnel may fail after TLS connects" >&2
 fi
 
-echo "==> Mapping istiod to xDS LoadBalancer (resolve hostname to IP for /etc/hosts)"
+echo "==> Mapping istiod and east-west gateways in /etc/hosts"
 if [[ -n "${ISTIOD_GATEWAY_IP:-}" ]]; then
-  EW_GATEWAY_IP="${ISTIOD_GATEWAY_IP}"
+  ISTIOD_IP="${ISTIOD_GATEWAY_IP}"
 elif [[ "${ISTIOD_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  EW_GATEWAY_IP="${ISTIOD_GATEWAY_HOST}"
+  ISTIOD_IP="${ISTIOD_GATEWAY_HOST}"
 else
-  EW_GATEWAY_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
-  if [[ -z "${EW_GATEWAY_IP}" ]]; then
+  ISTIOD_IP="$(getent ahostsv4 "${ISTIOD_GATEWAY_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  if [[ -z "${ISTIOD_IP}" ]]; then
     echo "ERROR: cannot resolve ISTIOD_GATEWAY_HOST=${ISTIOD_GATEWAY_HOST} (set ISTIOD_GATEWAY_IP in onboarding ew-gateway.env)" >&2
     exit 1
   fi
 fi
-echo "    ${ISTIOD_GATEWAY_HOST} -> ${EW_GATEWAY_IP}"
-grep -v 'istiod\.istio-system\.svc' /etc/hosts > /etc/hosts.tmp || true
+echo "    ${ISTIOD_GATEWAY_HOST} -> ${ISTIOD_IP}"
+if [[ -n "${EW_GATEWAY_IP:-}" ]]; then
+  EW_IP="${EW_GATEWAY_IP}"
+elif [[ -n "${EW_GATEWAY_HOST:-}" ]]; then
+  if [[ "${EW_GATEWAY_HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    EW_IP="${EW_GATEWAY_HOST}"
+  else
+    EW_IP="$(getent ahostsv4 "${EW_GATEWAY_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  fi
+  [[ -n "${EW_IP:-}" ]] && echo "    ${EW_GATEWAY_HOST} -> ${EW_IP} (east-west HBONE)"
+fi
+ISTIOD_GATEWAY_IP="${ISTIOD_IP}"
+EW_GATEWAY_IP="${EW_IP:-}"
+write_ew_gateway_env
+grep -v -E 'istiod\.istio-system\.svc|istio-eastwestgateway\.istio-system\.svc' /etc/hosts > /etc/hosts.tmp || true
 mv /etc/hosts.tmp /etc/hosts
 cat >>/etc/hosts <<HOSTS
-${EW_GATEWAY_IP} istiod.istio-system.svc istiod.istio-system.svc.cluster.local
+${ISTIOD_IP} istiod.istio-system.svc istiod.istio-system.svc.cluster.local
 HOSTS
+if [[ -n "${EW_IP:-}" ]]; then
+  cat >>/etc/hosts <<HOSTS
+${EW_IP} istio-eastwestgateway.istio-system.svc istio-eastwestgateway.istio-system.svc.cluster.local
+HOSTS
+fi
 
 chown -R istio-proxy:istio-proxy /var/lib/istio /var/run/secrets /etc/certs /etc/istio
 
-echo "==> Installing systemd unit (start-ztunnel.sh resolves EW LB IP on each start)"
+echo "==> Installing systemd unit (native ztunnel)"
 cat >/etc/systemd/system/ztunnel.service <<EOF
 [Unit]
-Description=Istio ztunnel (ambient) for OSM PoC
+Description=Istio ztunnel (ambient, native) for OSM PoC
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Environment=ZTUNNEL_IMAGE=${ZTUNNEL_IMAGE}
+User=istio-proxy
+Group=istio-proxy
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+Environment=ZTUNNEL_BIN=${ZTUNNEL_BIN}
+Environment=ZTUNNEL_LIBS_ROOT=/opt/istio/ztunnel-libs
 Environment=PROXY_WORKLOAD_INFO=${PROXY_WORKLOAD_INFO}
-ExecStartPre=-/usr/bin/podman rm -f ztunnel
+EnvironmentFile=-${EW_GATEWAY_CONFIG}
 ExecStart=/usr/local/bin/start-ztunnel.sh
-ExecStop=/usr/bin/podman stop -t 10 ztunnel
 Restart=always
 RestartSec=5
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
@@ -249,7 +308,7 @@ systemctl enable ztunnel-dns-forward.service ztunnel-redirect.service
 echo "Run in order:"
 echo "  sudo systemctl enable --now ztunnel"
 echo "  sudo systemctl start ztunnel-dns-forward"
-echo "  sudo ./run-ms-c.sh   # or podman start ms-c, then:"
+echo "  sudo ./run-ms-c.sh"
 echo "  sudo systemctl start ztunnel-redirect"
 echo "  sudo verify-ztunnel.sh"
 echo "Mesh egress test (from cluster): oc -n osm-poc-demo exec deploy/ms-b -- curl -sf http://ms-c:8080/api/handle-from-b"
@@ -257,8 +316,8 @@ echo "Mesh egress test (from cluster): oc -n osm-poc-demo exec deploy/ms-b -- cu
 if systemctl is-active --quiet ztunnel 2>/dev/null; then
   echo "==> ztunnel already running — reload units (restart manually if you changed env: systemctl restart ztunnel)"
   systemctl start ztunnel-dns-forward 2>/dev/null || true
-  if podman container exists ms-c 2>/dev/null; then
-    echo "==> ms-c detected — applying outbound redirect"
+  if systemctl is-active --quiet ms-c 2>/dev/null; then
+    echo "==> ms-c active — applying outbound redirect"
     /usr/local/bin/setup-ztunnel-redirect.sh || true
     systemctl start ztunnel-redirect 2>/dev/null || true
   fi

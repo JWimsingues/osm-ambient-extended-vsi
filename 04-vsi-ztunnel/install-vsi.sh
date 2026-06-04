@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Workstation helper: generate onboarding, copy to VSI, print install commands.
+# Workstation helper: build artifacts, generate onboarding, copy to VSI.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,9 +11,11 @@ cd "${ROOT}"
 : "${SSH_KEY:?Set SSH_KEY to your .prv file}"
 : "${SSH_USER:=vpcuser}"
 
+"${ROOT}/package-ms-c-jar.sh"
+"${ROOT}/fetch-ztunnel-binary.sh"
 "${ROOT}/generate-vsi-onboarding.sh"
 
-echo "==> Copying scripts and onboarding to ${SSH_USER}@${VSI_PUBLIC_IP}"
+echo "==> Copying scripts, binaries, and onboarding to ${SSH_USER}@${VSI_PUBLIC_IP}"
 scp -i "${SSH_KEY}" -r \
   "${ROOT}/scripts/install-ztunnel.sh" \
   "${ROOT}/scripts/start-ztunnel.sh" \
@@ -28,12 +30,11 @@ cat <<EOF
 ==> On the VSI (as ${SSH_USER}):
   cd ~
   export EW_GATEWAY_HOST=${EW_GATEWAY_HOST}
-  export QUAY_ORG=<your-quay-org>
-  export IMAGE_TAG=latest
+  export ISTIOD_GATEWAY_HOST=\${ISTIOD_GATEWAY_HOST:-$(oc -n istio-system get svc istiod-xds-external -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "${EW_GATEWAY_HOST}")}
   sudo -E ./install-ztunnel.sh
   sudo systemctl enable --now ztunnel
   sudo systemctl start ztunnel-dns-forward
-  sudo -E ./run-ms-c.sh
+  sudo -E MS_A_URL=http://ms-a.osm-poc-demo.svc.cluster.local:8080 ./run-ms-c.sh
   sudo verify-ztunnel.sh
 
 ==> From the cluster:
