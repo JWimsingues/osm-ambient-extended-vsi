@@ -34,8 +34,10 @@ oc -n istio-system rollout status deploy/istiod --timeout=5m &>/dev/null \
   && ok "istiod rolled out" \
   || err "istiod rollout incomplete"
 
-oc -n ztunnel get pods -l app.kubernetes.io/name=ztunnel 2>/dev/null | grep -q Running \
-  && ok "ztunnel pods Running" \
-  || err "no Running ztunnel pods in namespace ztunnel"
+if oc -n ztunnel get pods --field-selector=status.phase=Running 2>/dev/null | grep -qE '^ztunnel-'; then
+  ok "ztunnel pods Running"
+else
+  err "no Running ztunnel pods in namespace ztunnel"
+fi
 
 exit "${fail}"

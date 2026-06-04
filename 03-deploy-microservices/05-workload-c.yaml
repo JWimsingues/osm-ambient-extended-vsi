@@ -31,7 +31,6 @@ metadata:
     version: v1
 spec:
   address: ${VSI_PRIVATE_IP}
-  network: vsi-network
   labels:
     app: ms-c
     version: v1
