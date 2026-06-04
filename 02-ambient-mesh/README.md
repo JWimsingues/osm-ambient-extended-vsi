@@ -1,4 +1,4 @@
-# Step 2 — Install OSM 3.2 Ambient Mode
+# Step 2 — Install OSM 3.3 Ambient Mode
 
 ## Summary
 
@@ -40,6 +40,7 @@ Deploys the Istio ambient data plane on ROCKS: `Istio` control plane, `IstioCNI`
    oc -n istio-system rollout status deploy/istio-eastwestgateway --timeout=5m
    oc apply -f 05-expose-istiod.yaml
    oc apply -f 06-expose-istiod-lb.yaml
+   oc label namespace istio-system topology.istio.io/network=main-network --overwrite
    oc -n istio-system rollout status deploy/istiod --timeout=5m
    ```
 

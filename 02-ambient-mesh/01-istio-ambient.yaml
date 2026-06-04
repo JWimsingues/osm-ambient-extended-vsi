@@ -1,9 +1,10 @@
-# Purpose: Istio control plane with ambient profile and multi-network mesh identity.
+# Purpose: Istio control plane (OSM 3.3 / Istio 1.28.6) with ambient + multi-network.
 apiVersion: sailoperator.io/v1
 kind: Istio
 metadata:
   name: default
 spec:
+  version: v1.28.6
   namespace: istio-system
   profile: ambient
   values:
@@ -18,10 +19,7 @@ spec:
           endpoints:
             - fromRegistry: rocks-cluster
           gateways:
-            # Public LB IP/hostname reachable from the VSI (not in-cluster ClusterIP).
-            # Regenerate after east-west LB reprovision: EW_GATEWAY_HOST from
-            # oc -n istio-system get svc istio-eastwestgateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-            - address: 3166540a-eu-de.lb.appdomain.cloud
+            - registryServiceName: istio-eastwestgateway.istio-system.svc.cluster.local
               port: 15008
         # VSI workloads (WorkloadEntry spec.network) are reachable at their registered address.
         vsi-network:
@@ -32,6 +30,8 @@ spec:
       env:
         PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION: "true"
         AMBIENT_ENABLE_MULTI_NETWORK: "true"
+        # OSM 3.3 TP: cross-network HBONE metadata (Istio 1.28+).
+        AMBIENT_ENABLE_BAGGAGE: "true"
     meshConfig:
       discoverySelectors:
         - matchLabels:

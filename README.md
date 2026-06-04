@@ -1,8 +1,8 @@
-# PoC: OpenShift Service Mesh 3.2 — Ambient Mode with ROCKS + IBM Cloud VSI
+# PoC: OpenShift Service Mesh 3.3 — Ambient Mode with ROCKS + IBM Cloud VSI
 
 ## Summary
 
-Demonstrates **OpenShift Service Mesh (OSM) 3.2** in **Istio ambient mode** on a **ROCKS** cluster (OpenShift on IBM Cloud) with two Java microservices in-cluster (**ms-a**, **ms-b**) and a third (**ms-c**) on an **IBM Cloud VSI**, joined via **ztunnel** and multi-network east-west gateway. Traffic follows a strict ring **A → B → C → A** enforced by L4 `AuthorizationPolicy` and correlated by `X-Trace-Id` logs.
+Demonstrates **OpenShift Service Mesh (OSM) 3.3** in **Istio ambient mode** (Istio **1.28.6**) on a **ROCKS** cluster (OpenShift on IBM Cloud) with two Java microservices in-cluster (**ms-a**, **ms-b**) and a third (**ms-c**) on an **IBM Cloud VSI**, joined via **ztunnel** and multi-network east-west gateway. Traffic follows a strict ring **A → B → C → A** enforced by L4 `AuthorizationPolicy` and correlated by `X-Trace-Id` logs.
 
 ## Environment
 
@@ -65,9 +65,10 @@ Demonstrates **OpenShift Service Mesh (OSM) 3.2** in **Istio ambient mode** on a
 
 ## Official documentation
 
-- [OSM 3.2 Installing](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/index)
-- [Istio ambient mode (OSM 3.2)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html/installing/ossm-istio-ambient-mode)
-- [OSM 3.2 Release notes (ambient GA)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.2/html-single/release_notes/index)
+- [OSM 3.3 Installing](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/index)
+- [Istio ambient mode (OSM 3.3)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/ossm-istio-ambient-mode)
+- [OSM 3.3 Multi-cluster ambient (TP)](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/installing/ossm-multi-cluster-topologies)
+- [OSM 3.3 Release notes](https://docs.redhat.com/en/documentation/red_hat_openshift_service_mesh/3.3/html/release_notes/ossm-release-notes)
 - [Integrate external Linux VMs](https://developers.redhat.com/articles/2026/04/17/integrate-red-hat-enterprise-linux-vms-openshift-service-mesh)
 
 ## Important notes
