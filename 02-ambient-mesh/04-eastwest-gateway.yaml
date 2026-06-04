@@ -1,22 +1,58 @@
-# Purpose: Ambient HBONE east-west gateway (path 2 — software routing via EW LB :15008).
-# Replaces the legacy sidecar-based east-west deployment (TLS passthrough :15008 is not used by ztunnel).
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
+# Purpose: East-west gateway — bridges main-network (cluster) and vm-network (VSI).
+# Approach: sidecar-injected Deployment (per Red Hat Developer article on RHEL VM integration).
+# - Ports 15012/15017: expose istiod control-plane to VM sidecar
+# - Port 15443: cross-network data-plane (AUTO_PASSTHROUGH, SNI-based routing)
+# - Port 15021: health-check
+#
+# ISTIO_META_REQUESTED_NETWORK_VIEW=main-network ensures this gateway only serves
+# main-network endpoints for inbound routing (VM → cluster direction).
+# Cluster → VM direction uses direct routing to the VM's registered public IP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: istio-eastwestgateway
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: eastwestgateway
+  template:
+    metadata:
+      annotations:
+        inject.istio.io/templates: gateway
+      labels:
+        istio: eastwestgateway
+        sidecar.istio.io/inject: "true"
+        topology.istio.io/network: main-network
+    spec:
+      containers:
+        - name: istio-proxy
+          image: auto
+          env:
+            - name: ISTIO_META_REQUESTED_NETWORK_VIEW
+              value: "main-network"
+---
+apiVersion: v1
+kind: Service
 metadata:
   name: istio-eastwestgateway
   namespace: istio-system
   labels:
-    topology.istio.io/network: main-network
+    istio: eastwestgateway
 spec:
-  gatewayClassName: istio-east-west
-  listeners:
-    - name: mesh
-      port: 15008
-      protocol: HBONE
-      allowedRoutes:
-        namespaces:
-          from: All
-      tls:
-        mode: Terminate
-        options:
-          gateway.istio.io/tls-terminate-mode: ISTIO_MUTUAL
+  type: LoadBalancer
+  selector:
+    istio: eastwestgateway
+  ports:
+    - name: status-port
+      port: 15021
+      targetPort: 15021
+    - name: tcp-istiod
+      port: 15012
+      targetPort: 15012
+    - name: tcp-webhook
+      port: 15017
+      targetPort: 15017
+    - name: tls
+      port: 15443
+      targetPort: 15443

@@ -1,4 +1,8 @@
-# Purpose: Expose istiod through the east-west gateway for VSI ztunnel xDS/certs.
+# Purpose: Expose istiod and cross-network data-plane through the east-west gateway.
+# Per Red Hat Developer article on RHEL VM integration (OSM 3.3).
+#
+# istiod-gateway: VM sidecar uses port 15012/15017 (TLS passthrough) to reach istiod.
+# cross-network-gateway: VM → cluster data via AUTO_PASSTHROUGH on port 15443 (SNI routing).
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -38,8 +42,7 @@ spec:
   tls:
     - match:
         - port: 15012
-          sniHosts:
-            - "*"
+          sniHosts: ["*"]
       route:
         - destination:
             host: istiod.istio-system.svc.cluster.local
@@ -47,14 +50,15 @@ spec:
               number: 15012
     - match:
         - port: 15017
-          sniHosts:
-            - "*"
+          sniHosts: ["*"]
       route:
         - destination:
             host: istiod.istio-system.svc.cluster.local
             port:
               number: 443
 ---
+# cross-network-gateway: SNI-based passthrough for VM → cluster data traffic on port 15443.
+# AUTO_PASSTHROUGH: Envoy reads SNI, forwards the raw TLS to the matching cluster endpoint.
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
@@ -65,10 +69,10 @@ spec:
     istio: eastwestgateway
   servers:
     - port:
-        number: 15008
-        name: tls-hbone
+        number: 15443
+        name: tls
         protocol: TLS
       tls:
-        mode: PASSTHROUGH
+        mode: AUTO_PASSTHROUGH
       hosts:
         - "*.local"

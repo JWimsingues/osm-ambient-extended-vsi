@@ -1,4 +1,31 @@
-# Purpose: L4 AuthorizationPolicy — enforce A->B, B->C, C->A only (ambient ztunnel).
+# Purpose: AuthorizationPolicy — enforce zero-trust between services.
+# Chain: (external) → ms-a → ms-b → ms-c → ms-a
+#
+# ms-a: receives external traffic (via OpenShift Route) and internal calls from ms-c.
+#   Two rules: one allows the OpenShift router (unauthenticated), one allows ms-c (mTLS).
+# ms-b: receives only from ms-a (enforces A→B only).
+# ms-c: receives only from ms-b (enforces B→C only).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ms-a-allow-ingress
+  namespace: osm-poc-demo
+spec:
+  selector:
+    matchLabels:
+      app: ms-a
+  action: ALLOW
+  rules:
+    # Allow calls from ms-c (the C→A leg of the chain).
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/osm-poc-demo/sa/ms-c
+    # Allow external traffic (OpenShift Router / curl) with no Istio identity.
+    - from:
+        - source:
+            notPrincipals: ["*"]
+---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -30,19 +57,3 @@ spec:
         - source:
             principals:
               - cluster.local/ns/osm-poc-demo/sa/ms-b
----
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: ms-a-allow-from-c
-  namespace: osm-poc-demo
-spec:
-  selector:
-    matchLabels:
-      app: ms-a
-  action: ALLOW
-  rules:
-    - from:
-        - source:
-            principals:
-              - cluster.local/ns/osm-poc-demo/sa/ms-c

@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public final class MsBApplication {
@@ -28,7 +29,7 @@ public final class MsBApplication {
                 "allowedTarget", "ms-c only",
                 "role", "middle service on cluster")));
         server.createContext("/api/handle-from-a", exchange -> handleFromA(exchange, msCUrl));
-        server.setExecutor(null);
+        server.setExecutor(Executors.newCachedThreadPool());
         server.start();
 
         TraceLog.info(SERVICE, "-", "STARTUP", "listening on port " + port + " downstreamC=" + msCUrl);

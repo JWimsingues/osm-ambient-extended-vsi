@@ -23,13 +23,17 @@ spec:
       labels:
         app: ms-a
         version: v1
-        ambient.istio.io/redirection: enabled
         topology.istio.io/network: main-network
+      annotations:
+        # Use Envoy sidecar (not ambient ztunnel) so the VM proxy (ms-c) can reach ms-a
+        # via the EW gateway with regular mTLS instead of HBONE (HBONEPort=0 on EW GW).
+        sidecar.istio.io/inject: "true"
+        ambient.istio.io/redirection: disabled
     spec:
       serviceAccountName: ms-a
       containers:
         - name: ms-a
-          image: quay.io/${QUAY_ORG}/osm-poc-ms-a:${IMAGE_TAG}
+          image: quay.io/jwimsing/osm-poc-ms-a:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

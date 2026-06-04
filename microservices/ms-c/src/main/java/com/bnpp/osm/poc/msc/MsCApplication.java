@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public final class MsCApplication {
@@ -30,7 +31,7 @@ public final class MsCApplication {
                 "role", "edge service on IBM Cloud VSI")));
         server.createContext("/api/handle-from-b", exchange -> handleFromB(exchange, msAUrl));
         server.createContext("/api/call-a", exchange -> callA(exchange, msAUrl));
-        server.setExecutor(null);
+        server.setExecutor(Executors.newCachedThreadPool());
         server.start();
 
         TraceLog.info(

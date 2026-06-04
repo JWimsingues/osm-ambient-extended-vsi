@@ -1,5 +1,15 @@
-# Purpose: Represent ms-c on IBM Cloud VSI in the mesh (WorkloadGroup + WorkloadEntry + Service).
-# Replace VSI_PRIVATE_IP with the VSI address reachable from the cluster (and east-west gateway).
+# Purpose: Register ms-c (VSI workload) into the mesh.
+# Per the Red Hat Developer article approach:
+# - WorkloadGroup: template for autoregistration when the VM sidecar connects to istiod
+# - Service: ClusterIP that cluster workloads use to reach ms-c
+# - ServiceEntry: tells the mesh that ms-c is reachable at its registered WorkloadEntry address
+#
+# When the VM sidecar starts, istiod auto-creates a WorkloadEntry with the VM's registered IP
+# (set via INSTANCE_IP=<VSI_PUBLIC_IP> in the VM's cluster.env).
+#
+# For routing:
+# - Cluster → VM (ms-b sidecar → ms-c): direct mTLS to VM public IP (no gateway needed)
+# - VM → Cluster (ms-c → ms-a): via east-west gateway port 15443 (AUTO_PASSTHROUGH)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -18,51 +28,10 @@ spec:
       version: v1
   template:
     serviceAccount: ms-c
-    network: vsi-network
+    network: vm-network
 ---
-apiVersion: networking.istio.io/v1
-# metadata.name must match PROXY_WORKLOAD_INFO on the VSI (osm-poc-demo/<name>/ms-c).
-kind: WorkloadEntry
-metadata:
-  name: ms-c-vsi
-  namespace: osm-poc-demo
-  labels:
-    app: ms-c
-    version: v1
-spec:
-  address: ${VSI_PRIVATE_IP}
-  # Do not set spec.network on Istio 1.28.6 — it prevents WorkloadEntry from reaching the VSI ztunnel xDS
-  # (use topology label + ztunnel NETWORK=vsi-network env; see 04-vsi-ztunnel/README.md).
-  labels:
-    app: ms-c
-    version: v1
-    ambient.istio.io/redirection: enabled
-    topology.istio.io/network: vsi-network
-  serviceAccount: ms-c
-  ports:
-    http: 8080
----
-# Binds ClusterIP ms-c to the VSI IP (required for kube Service without selector).
-# Name must differ from WorkloadEntry metadata.name (ms-c-vsi) so istiod registers both workloads.
-apiVersion: discovery.k8s.io/v1
-kind: EndpointSlice
-metadata:
-  name: ms-c-endpoints
-  namespace: osm-poc-demo
-  labels:
-    kubernetes.io/service-name: ms-c
-addressType: IPv4
-ports:
-  - name: http
-    port: 8080
-    protocol: TCP
-endpoints:
-  - addresses:
-      - "${VSI_PRIVATE_IP}"
-    conditions:
-      ready: true
-    serviceAccountName: ms-c
----
+# ClusterIP service — cluster workloads resolve ms-c via this VIP.
+# No selector: endpoints come from the WorkloadEntry (auto-registered by VM sidecar).
 apiVersion: v1
 kind: Service
 metadata:
@@ -75,3 +44,23 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+---
+# ServiceEntry selects the WorkloadEntry via the app:ms-c label.
+# This binds the ClusterIP service to the auto-registered VM endpoint.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: ms-c
+  namespace: osm-poc-demo
+spec:
+  hosts:
+    - ms-c.osm-poc-demo.svc.cluster.local
+  location: MESH_INTERNAL
+  ports:
+    - number: 8080
+      name: http
+      protocol: HTTP
+  resolution: STATIC
+  workloadSelector:
+    labels:
+      app: ms-c

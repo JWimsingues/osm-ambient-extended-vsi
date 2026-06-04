@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public final class MsAApplication {
@@ -30,7 +31,7 @@ public final class MsAApplication {
         server.createContext("/api/call-b", exchange -> callB(exchange, msBUrl));
         server.createContext("/api/handle-from-c", MsAApplication::handleFromC);
         server.createContext("/api/run-chain", exchange -> runChain(exchange, msBUrl));
-        server.setExecutor(null);
+        server.setExecutor(Executors.newCachedThreadPool());
         server.start();
 
         TraceLog.info(SERVICE, "-", "STARTUP", "listening on port " + port + " downstreamB=" + msBUrl);

@@ -1,4 +1,6 @@
-# Purpose: ms-b Deployment — may call ms-c only; receives calls from ms-a only.
+# Purpose: ms-b Deployment — receives calls from ms-a, calls ms-c on the VSI.
+# ms-b uses Envoy sidecar (not ambient ztunnel) so it can route cross-network to ms-c
+# via the east-west gateway AUTO_PASSTHROUGH (port 15443).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -23,13 +25,16 @@ spec:
       labels:
         app: ms-b
         version: v1
-        ambient.istio.io/redirection: enabled
         topology.istio.io/network: main-network
+      annotations:
+        # Use Envoy sidecar (not ambient ztunnel) to support cross-network routing to vm-network.
+        sidecar.istio.io/inject: "true"
+        ambient.istio.io/redirection: disabled
     spec:
       serviceAccountName: ms-b
       containers:
         - name: ms-b
-          image: quay.io/${QUAY_ORG}/osm-poc-ms-b:${IMAGE_TAG}
+          image: quay.io/jwimsing/osm-poc-ms-b:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
